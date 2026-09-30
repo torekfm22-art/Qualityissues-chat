@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
-import { parseChatToNcr, scoreQualityMessage } from "../src/lib/parse-ncr";
+import { scoreQualityMessage } from "../src/lib/parse-ncr";
+import { parseChatToNcrHybrid } from "../src/lib/parse-hybrid";
 import { upsertMessage, listMessages } from "../src/lib/store";
 import { dayKeyKst } from "../src/lib/date-kst";
 import {
@@ -32,14 +33,19 @@ async function main() {
   let updated = 0;
   const results: Record<string, unknown>[] = [];
 
-  unique.forEach((row, i) => {
+  for (const [i, row] of unique.entries()) {
     const score = scoreQualityMessage(row.text);
     const receivedAt = row.at;
-    const parsed = parseChatToNcr(row.text);
-    if (!parsed.length) {
+    const hybrid = await parseChatToNcrHybrid(row.text, {
+      llmAssistEnabled: true,
+    });
+    if (!hybrid.records.length) {
       results.push({ i, ok: false, score, text: row.text.slice(0, 60) });
-      return;
+      continue;
     }
+    const parsed = hybrid.records;
+    const usedLlm =
+      hybrid.source === "llm" || hybrid.source === "llm_mock";
     const stored: StoredMessage = {
       id: crypto.randomUUID(),
       source: "telegram",
@@ -51,6 +57,8 @@ async function main() {
       receivedAt,
       dayKey: dayKeyKst(new Date(receivedAt)),
       parsed,
+      parseSource: hybrid.source,
+      needsReview: usedLlm,
     };
     const res = upsertMessage(stored);
     if (res.inserted) inserted++;
@@ -59,6 +67,7 @@ async function main() {
       i,
       ok: true,
       inserted: res.inserted,
+      source: hybrid.source,
       model: parsed[0].vehicleModel,
       product: parsed[0].productName,
       defect: parsed[0].defect,
@@ -66,7 +75,7 @@ async function main() {
       qty: parsed[0].quantity,
       action: parsed[0].action,
     });
-  });
+  }
 
   console.log(
     JSON.stringify({ unique: unique.length, inserted, updated, results }, null, 2),

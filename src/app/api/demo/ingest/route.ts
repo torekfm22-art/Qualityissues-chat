@@ -30,6 +30,8 @@ export async function POST() {
       receivedAt,
       dayKey: dayKeyKst(),
       parsed,
+      parseSource: "pattern",
+      needsReview: false,
     };
     if (upsertMessage(message).inserted) inserted++;
   });

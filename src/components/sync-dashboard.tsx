@@ -40,6 +40,9 @@ type SettingsResponse = {
     exportHourKst: number;
     autoExportEnabled: boolean;
     replyOnIngest: boolean;
+    llmAssistEnabled: boolean;
+    llmMode: "openai" | "mock" | "off";
+    hasLlmKey: boolean;
     hasToken: boolean;
     tokenFromEnv: boolean;
     discoveredChats: DiscoveredChat[];
@@ -68,6 +71,7 @@ export function SyncDashboard() {
   const [exportHour, setExportHour] = useState(23);
   const [autoExport, setAutoExport] = useState(true);
   const [replyOnIngest, setReplyOnIngest] = useState(true);
+  const [llmAssistEnabled, setLlmAssistEnabled] = useState(true);
   const [discovered, setDiscovered] = useState<DiscoveredChat[]>([]);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
@@ -99,6 +103,7 @@ export function SyncDashboard() {
     setExportHour(data.settings.exportHourKst);
     setAutoExport(data.settings.autoExportEnabled);
     setReplyOnIngest(data.settings.replyOnIngest ?? true);
+    setLlmAssistEnabled(data.settings.llmAssistEnabled ?? true);
     setDiscovered(data.settings.discoveredChats || []);
   }, []);
 
@@ -131,6 +136,7 @@ export function SyncDashboard() {
       setExportHour(setData.settings.exportHourKst);
       setAutoExport(setData.settings.autoExportEnabled);
       setReplyOnIngest(setData.settings.replyOnIngest ?? true);
+      setLlmAssistEnabled(setData.settings.llmAssistEnabled ?? true);
       setDiscovered(setData.settings.discoveredChats || []);
       if (typeof window !== "undefined" && !webhookUrl) {
         setWebhookUrl(`${window.location.origin}/api/telegram/webhook`);
@@ -164,6 +170,7 @@ export function SyncDashboard() {
           exportHourKst: exportHour,
           autoExportEnabled: autoExport,
           replyOnIngest,
+          llmAssistEnabled,
         }),
       });
       const data = await res.json();
@@ -464,7 +471,23 @@ export function SyncDashboard() {
                       {flatRows.map(({ message, record }, idx) => (
                         <TableRow key={`${message.id}-${record.id}-${idx}`}>
                           <TableCell>
-                            <Badge variant="secondary">{message.source}</Badge>
+                            <div className="flex flex-col gap-1">
+                              <Badge variant="secondary">{message.source}</Badge>
+                              {message.parseSource === "pattern" && (
+                                <Badge variant="outline" className="text-[10px]">
+                                  패턴
+                                </Badge>
+                              )}
+                              {(message.parseSource === "llm" ||
+                                message.parseSource === "llm_mock") && (
+                                <Badge
+                                  variant="outline"
+                                  className="border-amber-500/50 text-[10px] text-amber-800"
+                                >
+                                  {message.needsReview ? "LLM·검토" : "LLM"}
+                                </Badge>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell className="max-w-[140px] truncate text-sm">
                             {message.chatTitle}
@@ -624,6 +647,23 @@ export function SyncDashboard() {
                     <Switch
                       checked={replyOnIngest}
                       onCheckedChange={setReplyOnIngest}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border border-[var(--panel-border)] bg-[var(--panel-soft)]/60 px-3 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-[var(--steel-deep)]">
+                        LLM 2차 보조
+                      </p>
+                      <p className="text-xs text-[var(--ink-muted)]">
+                        패턴 실패·QC 의심 톡만 LLM 보완
+                        {settings?.hasLlmKey
+                          ? " · API 키 연결됨"
+                          : " · 키 없으면 로컬 보조"}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={llmAssistEnabled}
+                      onCheckedChange={setLlmAssistEnabled}
                     />
                   </div>
                 </div>

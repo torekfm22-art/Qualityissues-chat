@@ -2,6 +2,8 @@ import type { NcrRecord } from "./types";
 
 export type MessageSource = "telegram" | "kakao" | "manual" | "demo";
 
+export type ParsePipelineSource = "pattern" | "llm" | "llm_mock" | "none";
+
 export interface StoredMessage {
   id: string;
   source: MessageSource;
@@ -13,6 +15,10 @@ export interface StoredMessage {
   receivedAt: string; // ISO
   dayKey: string; // YYYY-MM-DD in Asia/Seoul
   parsed: NcrRecord[];
+  /** How fields were extracted */
+  parseSource?: ParsePipelineSource;
+  /** LLM-assisted rows should be human-checked */
+  needsReview?: boolean;
 }
 
 export interface DiscoveredChat {
@@ -29,6 +35,8 @@ export interface AppSettings {
   exportHourKst: number; // 0-23, when daily excel is sealed
   autoExportEnabled: boolean;
   replyOnIngest: boolean;
+  /** Pattern first; LLM only when pattern misses QC-looking messages */
+  llmAssistEnabled: boolean;
   lastPollUpdateId: number;
   lastDailyExportDay: string;
   discoveredChats: DiscoveredChat[];
@@ -41,6 +49,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   exportHourKst: 23,
   autoExportEnabled: true,
   replyOnIngest: true,
+  llmAssistEnabled: true,
   lastPollUpdateId: 0,
   lastDailyExportDay: "",
   discoveredChats: [],

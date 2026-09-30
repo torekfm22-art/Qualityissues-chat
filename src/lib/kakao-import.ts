@@ -1,7 +1,7 @@
 import { dayKeyKst, formatKstDisplay } from "./date-kst";
-import { parseChatToNcr } from "./parse-ncr";
+import { parseChatToNcrHybrid } from "./parse-hybrid";
 import type { StoredMessage } from "./models";
-import { upsertMessage } from "./store";
+import { getSettings, upsertMessage } from "./store";
 
 /**
  * Parse KakaoTalk "대화 내용 내보내기" text exports.
@@ -75,29 +75,33 @@ export function splitKakaoExport(text: string): {
   return { roomTitle, blocks };
 }
 
-export function ingestKakaoExport(
+export async function ingestKakaoExport(
   text: string,
   opts?: { chatId?: string; fileName?: string },
-): { inserted: number; skipped: number; roomTitle: string } {
+): Promise<{ inserted: number; skipped: number; roomTitle: string }> {
   const { roomTitle, blocks } = splitKakaoExport(text);
   const chatId = opts?.chatId || opts?.fileName || roomTitle;
+  const llmAssistEnabled = getSettings().llmAssistEnabled !== false;
   let inserted = 0;
   let skipped = 0;
 
-  blocks.forEach((block, index) => {
-    const parsed = parseChatToNcr(
+  for (const [index, block] of blocks.entries()) {
+    const hybrid = await parseChatToNcrHybrid(
       `${block.sender} ${block.timeLabel}\n${block.body}`,
+      { llmAssistEnabled },
     );
     const looksLikeQc =
       /품명|불량|공정|부적합|NCR|로트|수량|스크래치|치수|찍힘|휨/i.test(
         block.body,
       );
-    if (parsed.length === 0 && !looksLikeQc) {
+    if (hybrid.records.length === 0 && !looksLikeQc) {
       skipped++;
-      return;
+      continue;
     }
 
     const receivedAt = new Date().toISOString();
+    const usedLlm =
+      hybrid.source === "llm" || hybrid.source === "llm_mock";
     const message: StoredMessage = {
       id: crypto.randomUUID(),
       source: "kakao",
@@ -108,12 +112,17 @@ export function ingestKakaoExport(
       text: block.body,
       receivedAt,
       dayKey: dayKeyKst(),
+      parseSource: hybrid.source,
+      needsReview: usedLlm,
       parsed:
-        parsed.length > 0
-          ? parsed.map((p) => ({
+        hybrid.records.length > 0
+          ? hybrid.records.map((p) => ({
               ...p,
               reporter: p.reporter || block.sender,
-              occurredAt: p.occurredAt || block.timeLabel || formatKstDisplay(receivedAt),
+              occurredAt:
+                p.occurredAt ||
+                block.timeLabel ||
+                formatKstDisplay(receivedAt),
             }))
           : [],
     };
@@ -121,7 +130,7 @@ export function ingestKakaoExport(
     const result = upsertMessage(message);
     if (result.inserted) inserted++;
     else skipped++;
-  });
+  }
 
   return { inserted, skipped, roomTitle };
 }

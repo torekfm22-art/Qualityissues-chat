@@ -1,10 +1,9 @@
 import { dayKeyKst, formatKstDisplay } from "./date-kst";
 import {
-  isConfidentNcrRecord,
-  parseChatToNcr,
   QC_INGEST_SCORE_THRESHOLD,
   scoreQualityMessage,
 } from "./parse-ncr";
+import { parseChatToNcrHybrid } from "./parse-hybrid";
 import type { DiscoveredChat, MessageSource, StoredMessage } from "./models";
 import {
   getSettings,
@@ -138,11 +137,16 @@ async function maybeAckIngest(
   }
 }
 
-export function ingestTelegramMessage(
+export async function ingestTelegramMessage(
   msg: TelegramMessage,
   source: MessageSource = "telegram",
   opts?: { tokenForAck?: string },
-): { inserted: boolean; message: StoredMessage | null; skipped?: string } {
+): Promise<{
+  inserted: boolean;
+  message: StoredMessage | null;
+  skipped?: string;
+  parseSource?: string;
+}> {
   rememberChat(msg);
 
   const text = (msg.text || msg.caption || "").trim();
@@ -171,17 +175,23 @@ export function ingestTelegramMessage(
 
   const receivedAt = new Date(msg.date * 1000).toISOString();
   const sender = senderName(msg);
-  const parsed = parseChatToNcr(
+  const hybrid = await parseChatToNcrHybrid(
     `${sender ? `${sender} ${formatKstDisplay(receivedAt)}\n` : ""}${text}`,
-  ).filter(isConfidentNcrRecord);
+    { llmAssistEnabled: settings.llmAssistEnabled !== false },
+  );
 
   // Do not store weak/partial guesses — only confident NCR rows
-  if (parsed.length === 0) {
-    logSkip(text, `not_qc_unparsed:score_${relevance.score}`, chatTitle);
+  if (hybrid.records.length === 0) {
+    logSkip(
+      text,
+      `not_qc_unparsed:score_${relevance.score}:llm_${hybrid.llmMode}`,
+      chatTitle,
+    );
     return { inserted: false, message: null, skipped: "not_qc_unparsed" };
   }
 
-  const records = parsed;
+  const records = hybrid.records;
+  const usedLlm = hybrid.source === "llm" || hybrid.source === "llm_mock";
 
   const stored: StoredMessage = {
     id: crypto.randomUUID(),
@@ -194,13 +204,15 @@ export function ingestTelegramMessage(
     receivedAt,
     dayKey: dayKeyKst(new Date(receivedAt)),
     parsed: records,
+    parseSource: hybrid.source,
+    needsReview: usedLlm,
   };
 
   const result = upsertMessage(stored);
   if (result.inserted && opts?.tokenForAck) {
     void maybeAckIngest(opts.tokenForAck, msg, records.length);
   }
-  return result;
+  return { ...result, parseSource: hybrid.source };
 }
 
 export async function pollTelegramUpdates(limit = 50): Promise<{
@@ -236,7 +248,9 @@ export async function pollTelegramUpdates(limit = 50): Promise<{
       skipped++;
       continue;
     }
-    const result = ingestTelegramMessage(msg, "telegram", { tokenForAck: token });
+    const result = await ingestTelegramMessage(msg, "telegram", {
+      tokenForAck: token,
+    });
     if (result.inserted) inserted++;
     else skipped++;
   }

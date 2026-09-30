@@ -21,7 +21,7 @@ export async function POST(request: Request) {
   if (!msg) return NextResponse.json({ ok: true, skipped: "no_message" });
 
   const token = resolveBotToken(settings);
-  const result = ingestTelegramMessage(msg, "telegram", {
+  const result = await ingestTelegramMessage(msg, "telegram", {
     tokenForAck: token || undefined,
   });
   await maybeRunScheduledDailyExport();
@@ -30,5 +30,6 @@ export async function POST(request: Request) {
     ok: true,
     inserted: result.inserted,
     skipped: result.skipped ?? null,
+    parseSource: result.parseSource ?? null,
   });
 }

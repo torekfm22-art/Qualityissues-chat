@@ -17,7 +17,7 @@ export async function POST(request: Request) {
         );
       }
       const text = await file.text();
-      const result = ingestKakaoExport(text, { fileName: file.name });
+      const result = await ingestKakaoExport(text, { fileName: file.name });
       return NextResponse.json({ ok: true, ...result });
     }
 
@@ -28,7 +28,9 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const result = ingestKakaoExport(body.text, { fileName: body.fileName });
+    const result = await ingestKakaoExport(body.text, {
+      fileName: body.fileName,
+    });
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     return NextResponse.json(

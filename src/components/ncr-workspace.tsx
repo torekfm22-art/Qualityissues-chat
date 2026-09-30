@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState } from "react";
 import {
   ClipboardPaste,
   Download,
@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { exportNcrToExcel } from "@/lib/export-excel";
-import { parseChatToNcr, SAMPLE_CHAT } from "@/lib/parse-ncr";
+import { SAMPLE_CHAT } from "@/lib/parse-ncr";
 import { emptyNcr, NCR_COLUMNS, type NcrRecord } from "@/lib/types";
 
 export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
@@ -32,8 +32,9 @@ export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
   const [records, setRecords] = useState<NcrRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, setIsPending] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [parseSource, setParseSource] = useState<string | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -41,10 +42,21 @@ export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
     return () => clearTimeout(t);
   }, [toast]);
 
-  function runParse(source: string) {
+  async function runParse(source: string) {
     setError(null);
-    startTransition(() => {
-      const parsed = parseChatToNcr(source);
+    setParseSource(null);
+    setIsPending(true);
+    try {
+      const res = await fetch("/api/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: source }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "파싱 실패");
+      }
+      const parsed = (data.records || []) as NcrRecord[];
       if (parsed.length === 0) {
         setRecords([]);
         setError(
@@ -53,8 +65,22 @@ export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
         return;
       }
       setRecords(parsed);
-      setToast(`${parsed.length}건 정리 완료`);
-    });
+      setParseSource(data.source);
+      const via =
+        data.source === "pattern"
+          ? "패턴"
+          : data.source === "llm"
+            ? "LLM"
+            : data.source === "llm_mock"
+              ? "LLM(로컬)"
+              : data.source;
+      setToast(`${parsed.length}건 정리 완료 · ${via}`);
+    } catch (e) {
+      setRecords([]);
+      setError(e instanceof Error ? e.message : "파싱 실패");
+    } finally {
+      setIsPending(false);
+    }
   }
 
   function handleParse() {
@@ -62,12 +88,12 @@ export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
       setError("채팅 내용을 붙여넣은 뒤 정리하기를 눌러 주세요.");
       return;
     }
-    runParse(chat);
+    void runParse(chat);
   }
 
   function loadSample() {
     setChat(SAMPLE_CHAT);
-    runParse(SAMPLE_CHAT);
+    void runParse(SAMPLE_CHAT);
   }
 
   function updateCell(id: string, key: keyof NcrRecord, value: string) {
@@ -276,6 +302,17 @@ export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
               <Badge className="bg-[var(--steel-deep)] text-white">
                 {records.length}건
               </Badge>
+              {parseSource === "pattern" && (
+                <Badge variant="outline">패턴</Badge>
+              )}
+              {(parseSource === "llm" || parseSource === "llm_mock") && (
+                <Badge
+                  variant="outline"
+                  className="border-amber-500/50 text-amber-800"
+                >
+                  {parseSource === "llm" ? "LLM 보조" : "LLM 로컬 보조"}
+                </Badge>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" size="sm" onClick={addRow}>

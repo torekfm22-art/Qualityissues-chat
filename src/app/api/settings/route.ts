@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings, resolveBotToken, updateSettings } from "@/lib/store";
 import { getBotProfile } from "@/lib/telegram";
+import { resolveLlmConfig } from "@/lib/llm-ncr";
 import type { AppSettings } from "@/lib/models";
 
 export const runtime = "nodejs";
@@ -8,6 +9,7 @@ export const runtime = "nodejs";
 export async function GET() {
   const settings = getSettings();
   const token = resolveBotToken(settings);
+  const llm = resolveLlmConfig(settings.llmAssistEnabled !== false);
   let bot: { id: number; username?: string; first_name: string } | null = null;
   let botError: string | null = null;
   if (token) {
@@ -24,6 +26,9 @@ export async function GET() {
       telegramBotToken: settings.telegramBotToken ? "••••••••" : "",
       hasToken: Boolean(token),
       tokenFromEnv: Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim()),
+      llmAssistEnabled: settings.llmAssistEnabled !== false,
+      llmMode: llm.mode,
+      hasLlmKey: Boolean(llm.apiKey) && llm.mode === "openai",
     },
     bot,
     botError,
@@ -45,6 +50,9 @@ export async function PUT(request: Request) {
   if (typeof body.replyOnIngest === "boolean") {
     patch.replyOnIngest = body.replyOnIngest;
   }
+  if (typeof body.llmAssistEnabled === "boolean") {
+    patch.llmAssistEnabled = body.llmAssistEnabled;
+  }
   if (Array.isArray(body.telegramChatIds)) {
     patch.telegramChatIds = body.telegramChatIds
       .map((v) => String(v).trim())
@@ -62,12 +70,16 @@ export async function PUT(request: Request) {
   }
 
   const settings = updateSettings(patch);
+  const llm = resolveLlmConfig(settings.llmAssistEnabled !== false);
   return NextResponse.json({
     ok: true,
     settings: {
       ...settings,
       telegramBotToken: settings.telegramBotToken ? "••••••••" : "",
       hasToken: Boolean(resolveBotToken(settings)),
+      llmAssistEnabled: settings.llmAssistEnabled !== false,
+      llmMode: llm.mode,
+      hasLlmKey: Boolean(llm.apiKey) && llm.mode === "openai",
     },
   });
 }
