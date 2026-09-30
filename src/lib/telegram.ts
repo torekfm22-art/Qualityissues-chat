@@ -1,6 +1,10 @@
 import { dayKeyKst, formatKstDisplay } from "./date-kst";
-import { parseChatToNcr } from "./parse-ncr";
-import { emptyNcr } from "./types";
+import {
+  isConfidentNcrRecord,
+  parseChatToNcr,
+  QC_INGEST_SCORE_THRESHOLD,
+  scoreQualityMessage,
+} from "./parse-ncr";
 import type { DiscoveredChat, MessageSource, StoredMessage } from "./models";
 import {
   getSettings,
@@ -134,33 +138,28 @@ export function ingestTelegramMessage(
     return { inserted: false, message: null, skipped: "chat_not_allowed" };
   }
 
+  // Busy group filter: ignore chitchat / unrelated talk early
+  const relevance = scoreQualityMessage(text);
+  if (relevance.score < QC_INGEST_SCORE_THRESHOLD) {
+    return {
+      inserted: false,
+      message: null,
+      skipped: `not_qc_score_${relevance.score}`,
+    };
+  }
+
   const receivedAt = new Date(msg.date * 1000).toISOString();
   const sender = senderName(msg);
   const parsed = parseChatToNcr(
     `${sender ? `${sender} ${formatKstDisplay(receivedAt)}\n` : ""}${text}`,
-  );
+  ).filter(isConfidentNcrRecord);
 
-  const looksLikeQc =
-    /품명|불량|공정|부적합|NCR|로트|수량|스크래치|치수|찍힘|휨|크랙|파손|이물|#\s*\d+\s*공정|\d+\s*(?:EA|ea|개)\b/i.test(
-      text,
-    );
-  const records =
-    parsed.length > 0
-      ? parsed
-      : looksLikeQc
-        ? [
-            emptyNcr({
-              reporter: sender,
-              occurredAt: formatKstDisplay(receivedAt),
-              note: "자동 필드 인식 실패 — 원문 보관",
-              raw: text,
-            }),
-          ]
-        : [];
-
-  if (records.length === 0) {
-    return { inserted: false, message: null, skipped: "not_qc" };
+  // Do not store weak/partial guesses — only confident NCR rows
+  if (parsed.length === 0) {
+    return { inserted: false, message: null, skipped: "not_qc_unparsed" };
   }
+
+  const records = parsed;
 
   const stored: StoredMessage = {
     id: crypto.randomUUID(),

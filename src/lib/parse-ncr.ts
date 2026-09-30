@@ -478,16 +478,105 @@ export function parseChatToNcr(text: string): NcrRecord[] {
     }
   }
 
-  return records.filter(
-    (r) =>
-      r.productName ||
-      r.defect ||
-      r.process ||
-      r.quantity ||
-      r.partNumber ||
-      r.lot,
-  );
+  return records.filter(isConfidentNcrRecord);
 }
+
+/**
+ * Keep only records that look like real NCR rows — not casual chat fragments.
+ * Require at least two meaningful signals among product / defect / qty / process.
+ */
+export function isConfidentNcrRecord(r: NcrRecord): boolean {
+  const hasProduct = Boolean(r.productName?.trim());
+  const hasDefect = Boolean(r.defect?.trim()) && DEFECT_WORD.test(r.defect);
+  const hasQty = Boolean(r.quantity?.trim());
+  const hasProcess = Boolean(r.process?.trim());
+  const hasPart = Boolean(r.partNumber?.trim());
+  const hasLot = Boolean(r.lot?.trim());
+
+  // Explicit labels in raw text are strong
+  const labeled =
+    /(?:품\s*명|불량\s*현상|부적합)\s*[:=\-–>]/i.test(r.raw) &&
+    (hasProduct || hasDefect);
+
+  if (labeled && (hasProduct || hasDefect) && (hasQty || hasProcess || hasPart || hasLot || (hasProduct && hasDefect))) {
+    return true;
+  }
+
+  // Free-form: product + defect is enough
+  if (hasProduct && hasDefect) return true;
+  // defect + quantity or process
+  if (hasDefect && (hasQty || hasProcess)) return true;
+  // product + quantity + process (defect word missing but structured)
+  if (hasProduct && hasQty && hasProcess) return true;
+
+  return false;
+}
+
+/** Score raw chat text for QC relevance (higher = more likely NCR). */
+export function scoreQualityMessage(text: string): {
+  score: number;
+  reasons: string[];
+} {
+  const t = text.trim();
+  const reasons: string[] = [];
+  let score = 0;
+
+  if (!t || t.length < 4) return { score: 0, reasons: ["too_short"] };
+
+  // Noise / chitchat
+  if (
+    /^(네|넵|ㅇㅇ|확인|확인했습니다|알겠습니다|수고|점심|출근|퇴근|ㅋㅋ+|ㅎㅎ+|로맨|ㄱㅅ|감사)/i.test(
+      t,
+    ) &&
+    t.length < 40
+  ) {
+    return { score: 0, reasons: ["chitchat"] };
+  }
+
+  if (/(?:품\s*명|제품명)\s*[:=\-–>]/i.test(t)) {
+    score += 3;
+    reasons.push("label_product");
+  }
+  if (/(?:불량\s*현상|부적합)\s*[:=\-–>]|#\s*부적합|#\s*NCR/i.test(t)) {
+    score += 3;
+    reasons.push("label_defect");
+  }
+  if (DEFECT_WORD.test(t)) {
+    score += 2;
+    reasons.push("defect_word");
+  }
+  if (/(?:\d+(?:[.,]\d+)?)\s*(?:EA|ea|개|pcs|PCS)(?=$|\s|[^\w])/i.test(t)) {
+    score += 2;
+    reasons.push("quantity");
+  }
+  if (/(?:#\s*\d+\s*공정|\d+\s*공정|\bP[-_]?\d+\b|공정\s*[#:\-]?\s*\S+)/i.test(t)) {
+    score += 2;
+    reasons.push("process");
+  }
+  if (/(?:로트|LOT)[-_]?\w+/i.test(t)) {
+    score += 1;
+    reasons.push("lot");
+  }
+  if (/(?:수량|불량\s*수)\s*[:=\-–>]/i.test(t)) {
+    score += 1;
+    reasons.push("label_qty");
+  }
+
+  // Lone weak words without other signals
+  if (
+    score <= 2 &&
+    /^(?:공정|수량|로트|라인)\s*(?:확인|어때|어때요|어때용|어떻게|회의|진행)?\s*$/i.test(
+      t,
+    )
+  ) {
+    return { score: 0, reasons: ["weak_alone"] };
+  }
+
+  return { score, reasons };
+}
+
+/** Minimum score to even attempt NCR ingest from a busy group chat. */
+export const QC_INGEST_SCORE_THRESHOLD = 4;
 
 export const SAMPLE_CHAT = `--------------- 2026년 3월 28일 토요일 ---------------
 김품질 오전 9:14
