@@ -94,8 +94,10 @@ export function NcrWorkspace() {
     try {
       await exportNcrToExcel(records);
       setToast("엑셀 파일이 다운로드되었습니다");
-    } catch {
-      setError("엑셀 내보내기에 실패했습니다. 다시 시도해 주세요.");
+    } catch (err) {
+      const detail =
+        err instanceof Error && err.message ? ` (${err.message})` : "";
+      setError(`엑셀 내보내기에 실패했습니다${detail}. 다시 시도해 주세요.`);
     } finally {
       setExporting(false);
     }

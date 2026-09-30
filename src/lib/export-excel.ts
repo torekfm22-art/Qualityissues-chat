@@ -1,6 +1,5 @@
-import ExcelJS from "exceljs";
-import { saveAs } from "file-saver";
-import { NCR_COLUMNS, type NcrRecord } from "./types";
+import type { NcrRecord } from "./types";
+import { NCR_COLUMNS } from "./types";
 
 function stamp(): string {
   const d = new Date();
@@ -8,10 +7,43 @@ function stamp(): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
+function toUint8Array(buffer: ArrayBuffer | ArrayBufferView | Uint8Array): Uint8Array {
+  if (buffer instanceof Uint8Array) return buffer;
+  if (buffer instanceof ArrayBuffer) return new Uint8Array(buffer);
+  if (ArrayBuffer.isView(buffer)) {
+    return new Uint8Array(
+      buffer.buffer,
+      buffer.byteOffset,
+      buffer.byteLength,
+    );
+  }
+  return new Uint8Array(buffer as ArrayLike<number>);
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    // Delay revoke so Chromium can start the download
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
 export async function exportNcrToExcel(
   records: NcrRecord[],
   filename?: string,
 ): Promise<void> {
+  // Dynamic import keeps ExcelJS out of the initial SSR/client bundle path
+  const ExcelJS = (await import("exceljs")).default;
+
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "품질톡 정리기";
   workbook.created = new Date();
@@ -32,7 +64,11 @@ export async function exportNcrToExcel(
       pattern: "solid",
       fgColor: { argb: "FF1E3A4C" },
     };
-    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    cell.alignment = {
+      vertical: "middle",
+      horizontal: "center",
+      wrapText: true,
+    };
     cell.border = {
       bottom: { style: "thin", color: { argb: "FF0F2430" } },
     };
@@ -72,8 +108,13 @@ export async function exportNcrToExcel(
   });
 
   const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
+  const bytes = toUint8Array(buffer as ArrayBuffer | ArrayBufferView);
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const blob = new Blob([copy.buffer], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
-  saveAs(blob, filename ?? `품질부적합_${stamp()}.xlsx`);
+
+  const name = filename ?? `품질부적합_${stamp()}.xlsx`;
+  triggerDownload(blob, name);
 }
