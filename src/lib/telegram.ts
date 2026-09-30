@@ -12,6 +12,27 @@ import {
   updateSettings,
   upsertMessage,
 } from "./store";
+import { appendFileSync, mkdirSync, existsSync } from "fs";
+import path from "path";
+
+function logSkip(text: string, skipped: string, chatTitle: string) {
+  try {
+    const dir = path.join(process.cwd(), "data");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    appendFileSync(
+      path.join(dir, "skip-log.jsonl"),
+      `${JSON.stringify({
+        at: new Date().toISOString(),
+        skipped,
+        chatTitle,
+        text: text.slice(0, 500),
+      })}\n`,
+      "utf8",
+    );
+  } catch {
+    /* ignore */
+  }
+}
 
 const TG_API = "https://api.telegram.org";
 
@@ -138,14 +159,14 @@ export function ingestTelegramMessage(
     return { inserted: false, message: null, skipped: "chat_not_allowed" };
   }
 
+  const chatTitle = msg.chat.title || msg.chat.username || String(msg.chat.id);
+
   // Busy group filter: ignore chitchat / unrelated talk early
   const relevance = scoreQualityMessage(text);
   if (relevance.score < QC_INGEST_SCORE_THRESHOLD) {
-    return {
-      inserted: false,
-      message: null,
-      skipped: `not_qc_score_${relevance.score}`,
-    };
+    const skipped = `not_qc_score_${relevance.score}`;
+    logSkip(text, `${skipped}:${relevance.reasons.join(",")}`, chatTitle);
+    return { inserted: false, message: null, skipped };
   }
 
   const receivedAt = new Date(msg.date * 1000).toISOString();
@@ -156,6 +177,7 @@ export function ingestTelegramMessage(
 
   // Do not store weak/partial guesses — only confident NCR rows
   if (parsed.length === 0) {
+    logSkip(text, `not_qc_unparsed:score_${relevance.score}`, chatTitle);
     return { inserted: false, message: null, skipped: "not_qc_unparsed" };
   }
 
@@ -165,7 +187,7 @@ export function ingestTelegramMessage(
     id: crypto.randomUUID(),
     source,
     chatId,
-    chatTitle: msg.chat.title || msg.chat.username || chatId,
+    chatTitle,
     externalId: String(msg.message_id),
     sender,
     text,

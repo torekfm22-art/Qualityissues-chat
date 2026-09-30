@@ -92,7 +92,7 @@ const LOT_TOKEN = /^(?:LOT|로트)[-_]?\S+/i;
 
 /** Common defect / phenomenon words used in free-form field talk */
 const DEFECT_WORD =
-  /(?:스크래치|찍힘불량|찍힘|찍혀|휨|치수과다|치수미달|치수\s*불량|크랙|균열|오염|변색|파손|깨짐|들뜸|박리|이물|버어|미압입|미조립|누락|변형|함몰|갈라짐|벗겨짐|부유물|기포|웰드라인|플래시|short\s*shot|\bburr\b)/i;
+  /(?:스크래치|찍힘불량|찍힘|찍혀|휨|치수과다|치수미달|치수\s*불량|크랙|균열|오염|변색|파손|깨짐|들뜸|박리|이물|버어|미압입|미조립|누락|변형|함몰|갈라짐|벗겨짐|부유물|기포|웰드라인|플래시|설체결|오체결|미체결|설삽입|오삽입|미삽입|이음|기밀\s*(?:검사\s*)?NG|절연(?:저항)?(?:\s*검사)?\s*NG|검사\s*NG|\bNG\b|short\s*shot|\bburr\b)/i;
 
 const LOCATION_WORD =
   /(?:상단부?|하단부?|측면|표면|내면|외면|좌측|우측|앞쪽|뒤쪽|코너|모서리|장변|단변|전체)/;
@@ -313,6 +313,88 @@ function applyDelimitedGuess(leftover: string[], record: NcrRecord) {
 }
 
 /**
+ * Plant report format used in quality Telegram rooms:
+ *   #220공정
+ *   JG1 ICCU 하우징 볼트 설체결
+ *   2ea
+ *   격리 조치 후 리워크 대기
+ */
+function applyPlantReportFormat(block: string, record: NcrRecord): boolean {
+  const lines = block
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !/^\[(보고자|발생일시)\]/.test(l));
+
+  const procIdx = lines.findIndex((l) => /^#?\s*\d+\s*공정\s*$/.test(l));
+  const qtyIdx = lines.findIndex((l) =>
+    /^\d+(?:[.,]\d+)?\s*(?:ea|EA|개)\s*$/.test(l),
+  );
+  if (procIdx < 0 || qtyIdx < 0) return false;
+
+  if (!record.process) {
+    const m = lines[procIdx].match(/#?\s*(\d+)\s*공정/);
+    if (m) record.process = `${m[1]}공정`;
+  }
+  if (!record.quantity) {
+    const m = lines[qtyIdx].match(/^(\d+(?:[.,]\d+)?)\s*(ea|EA|개)/i);
+    if (m) record.quantity = `${m[1]}${m[2]}`;
+  }
+
+  const body = lines.filter((_, i) => i !== procIdx && i !== qtyIdx);
+  const actionLines: string[] = [];
+  const noteLines: string[] = [];
+  const contentLines: string[] = [];
+  for (const line of body) {
+    if (/^[（(].+[）)]$/.test(line)) {
+      noteLines.push(line.replace(/^[（(]|[）)]$/g, "").trim());
+    } else if (
+      /격리|조치|리워크|전수검사|원인\s*분석|분해\s*분석|대기|시행/.test(line)
+    ) {
+      actionLines.push(line);
+    } else {
+      contentLines.push(line);
+    }
+  }
+
+  const content = contentLines.join(" ").replace(/\s+/g, " ").trim();
+  // JG1 ICCU 하우징 볼트 설체결  |  SG2 ICCU 기밀검사 NG
+  const coded = content.match(
+    /^([A-Z]{1,4}\d+[A-Z]?)\s+([A-Za-z0-9_-]+)\s*[,，]?\s*(.+)$/,
+  );
+  if (coded) {
+    if (!record.partNumber) record.partNumber = coded[1];
+    if (!record.productName) {
+      record.productName = `${coded[1]} ${coded[2]}`.trim();
+    }
+    if (!record.defect) record.defect = coded[3].replace(/^[,，]\s*/, "").trim();
+  } else if (content) {
+    const ngSplit = content.match(/^(.+?)\s+((?:.+ )?NG|.+)$/i);
+    if (!record.productName && !record.defect && ngSplit) {
+      // fallback: whole content as defect if short product missing
+      record.defect = content;
+    } else if (!record.defect) {
+      record.defect = content;
+    } else if (!record.productName) {
+      record.productName = content;
+    }
+  }
+
+  if (actionLines.length) {
+    const joined = actionLines.join(" / ");
+    if (!record.action) record.action = joined;
+    else if (!record.note) record.note = joined;
+  }
+  if (noteLines.length) {
+    const joined = noteLines.join(" / ");
+    if (!record.note) record.note = joined;
+    else record.note = `${record.note} / ${joined}`;
+  }
+
+  return Boolean(record.process && record.quantity && (record.defect || record.productName));
+}
+
+/**
  * Field-style free talk, e.g.
  * "테스트 브라켓 상단부 스크래치 발생 2ea\n#120공정"
  */
@@ -435,8 +517,14 @@ function applyNaturalLanguageGuess(leftover: string[], record: NcrRecord) {
 
 function parseBlock(block: string): NcrRecord {
   const record = emptyNcr({ raw: block });
+
+  // Prefer plant multiline report format when detected
+  const plantOk = applyPlantReportFormat(block, record);
+
   const leftover = applyLabeledFields(block, record);
-  applyDelimitedGuess(leftover, record);
+  if (!plantOk) {
+    applyDelimitedGuess(leftover, record);
+  }
 
   const needsNatural =
     !record.productName ||
@@ -487,27 +575,44 @@ export function parseChatToNcr(text: string): NcrRecord[] {
  */
 export function isConfidentNcrRecord(r: NcrRecord): boolean {
   const hasProduct = Boolean(r.productName?.trim());
-  const hasDefect = Boolean(r.defect?.trim()) && DEFECT_WORD.test(r.defect);
+  const defectText = r.defect?.trim() || "";
+  const hasDefectText = Boolean(defectText);
+  const hasDefectWord = hasDefectText && DEFECT_WORD.test(defectText);
   const hasQty = Boolean(r.quantity?.trim());
   const hasProcess = Boolean(r.process?.trim());
   const hasPart = Boolean(r.partNumber?.trim());
   const hasLot = Boolean(r.lot?.trim());
+  const hasAction = Boolean(r.action?.trim());
+
+  // Plant format: #N공정 + qty + (product/defect body)
+  const plantShape =
+    /^#?\s*\d+\s*공정/m.test(r.raw) &&
+    /\d+\s*(?:ea|EA|개)\b/i.test(r.raw) &&
+    hasProcess &&
+    hasQty &&
+    (hasProduct || hasDefectText);
+  if (plantShape) return true;
 
   // Explicit labels in raw text are strong
   const labeled =
     /(?:품\s*명|불량\s*현상|부적합)\s*[:=\-–>]/i.test(r.raw) &&
-    (hasProduct || hasDefect);
+    (hasProduct || hasDefectText);
 
-  if (labeled && (hasProduct || hasDefect) && (hasQty || hasProcess || hasPart || hasLot || (hasProduct && hasDefect))) {
+  if (
+    labeled &&
+    (hasProduct || hasDefectText) &&
+    (hasQty || hasProcess || hasPart || hasLot || (hasProduct && hasDefectText))
+  ) {
     return true;
   }
 
-  // Free-form: product + defect is enough
-  if (hasProduct && hasDefect) return true;
-  // defect + quantity or process
-  if (hasDefect && (hasQty || hasProcess)) return true;
-  // product + quantity + process (defect word missing but structured)
+  // Free-form: product + defect word
+  if (hasProduct && hasDefectWord) return true;
+  // defect word + quantity or process
+  if (hasDefectWord && (hasQty || hasProcess)) return true;
+  // product + quantity + process (+ optional action)
   if (hasProduct && hasQty && hasProcess) return true;
+  if (hasDefectText && hasQty && hasProcess && hasAction) return true;
 
   return false;
 }
@@ -541,7 +646,7 @@ export function scoreQualityMessage(text: string): {
     score += 3;
     reasons.push("label_defect");
   }
-  if (DEFECT_WORD.test(t)) {
+  if (DEFECT_WORD.test(t) || /\bNG\b|설체결|설삽입|이음|격리\s*조치/i.test(t)) {
     score += 2;
     reasons.push("defect_word");
   }
@@ -552,6 +657,11 @@ export function scoreQualityMessage(text: string): {
   if (/(?:#\s*\d+\s*공정|\d+\s*공정|\bP[-_]?\d+\b|공정\s*[#:\-]?\s*\S+)/i.test(t)) {
     score += 2;
     reasons.push("process");
+  }
+  // Typical plant multiline report
+  if (/^#\s*\d+\s*공정\s*$/m.test(t) && /^\d+\s*(?:ea|EA|개)\s*$/m.test(t)) {
+    score += 2;
+    reasons.push("plant_format");
   }
   if (/(?:로트|LOT)[-_]?\w+/i.test(t)) {
     score += 1;
