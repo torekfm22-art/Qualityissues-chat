@@ -141,7 +141,9 @@ export function ingestTelegramMessage(
   );
 
   const looksLikeQc =
-    /품명|불량|공정|부적합|NCR|로트|수량|스크래치|치수|찍힘|휨/i.test(text);
+    /품명|불량|공정|부적합|NCR|로트|수량|스크래치|치수|찍힘|휨|크랙|파손|이물|#\s*\d+\s*공정|\d+\s*(?:EA|ea|개)\b/i.test(
+      text,
+    );
   const records =
     parsed.length > 0
       ? parsed

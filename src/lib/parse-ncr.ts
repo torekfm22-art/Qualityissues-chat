@@ -87,8 +87,15 @@ const SECTION_MARKERS =
 const BULLET = /^[\s]*[-–—*·•▪▸►]\s*/;
 
 const QUANTITY_TOKEN = /^(?:\d+(?:[.,]\d+)?)\s*(?:EA|ea|개|pcs|PCS|ea\.?)?$/;
-const PROCESS_TOKEN = /^(?:P[-_]?\d+\S*|공정\s*\S+)/i;
+const PROCESS_TOKEN = /^(?:P[-_]?\d+\S*|공정\s*\S+|#?\d+\s*공정)/i;
 const LOT_TOKEN = /^(?:LOT|로트)[-_]?\S+/i;
+
+/** Common defect / phenomenon words used in free-form field talk */
+const DEFECT_WORD =
+  /(?:스크래치|찍힘불량|찍힘|찍혀|휨|치수과다|치수미달|치수\s*불량|크랙|균열|오염|변색|파손|깨짐|들뜸|박리|이물|버어|미압입|미조립|누락|변형|함몰|갈라짐|벗겨짐|부유물|기포|웰드라인|플래시|short\s*shot|\bburr\b)/i;
+
+const LOCATION_WORD =
+  /(?:상단부?|하단부?|측면|표면|내면|외면|좌측|우측|앞쪽|뒤쪽|코너|모서리|장변|단변|전체)/;
 
 function cleanValue(value: string): string {
   return value
@@ -251,6 +258,13 @@ function applyDelimitedGuess(leftover: string[], record: NcrRecord) {
     .filter(Boolean);
 
   if (parts.length < 2) {
+    // Leave field-style prose for applyNaturalLanguageGuess
+    const looksNatural =
+      DEFECT_WORD.test(joined) ||
+      /\d+\s*(?:EA|ea|개)\b/.test(joined) ||
+      /#?\d+\s*공정/.test(joined);
+    if (looksNatural) return;
+
     if (!record.defect && !record.productName) {
       record.defect = joined;
     } else if (!record.note) {
@@ -298,10 +312,140 @@ function applyDelimitedGuess(leftover: string[], record: NcrRecord) {
   }
 }
 
+/**
+ * Field-style free talk, e.g.
+ * "테스트 브라켓 상단부 스크래치 발생 2ea\n#120공정"
+ */
+function applyNaturalLanguageGuess(leftover: string[], record: NcrRecord) {
+  let text = leftover.join("\n").trim();
+  if (!text) return;
+
+  // Strip messenger meta that may remain
+  text = text
+    .replace(/^\[보고자\]\s*.+$/gim, "")
+    .replace(/^\[발생일시\]\s*.+$/gim, "")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+  if (!text) return;
+
+  // Process: #120공정 / 120공정 / 공정 조립3 / P-120
+  if (!record.process) {
+    let processValue = "";
+    let matched = "";
+    const hashProc = text.match(/#\s*(\d+)\s*공정/);
+    const numProc = text.match(/(\d+)\s*공정/);
+    const labelProc = text.match(/공정\s*[#:\-]?\s*([^\n,#|/]+)/i);
+    const pCode = text.match(/\b(P[-_]?\d+)\b/i);
+    if (hashProc) {
+      matched = hashProc[0];
+      processValue = `${hashProc[1]}공정`;
+    } else if (numProc) {
+      matched = numProc[0];
+      processValue = `${numProc[1]}공정`;
+    } else if (labelProc) {
+      matched = labelProc[0];
+      processValue = labelProc[1].trim();
+    } else if (pCode) {
+      matched = pCode[0];
+      processValue = pCode[1];
+    }
+    if (processValue) {
+      record.process = processValue;
+      text = text.replace(matched, " ").trim();
+    }
+  }
+
+  // Quantity: 2ea / 2 EA / 2개 / 수량 2
+  // Avoid \\b after Korean units — JS word boundaries are ASCII-oriented.
+  if (!record.quantity) {
+    const qtyMatch =
+      text.match(/(\d+(?:[.,]\d+)?)\s*(EA|ea|개|pcs|PCS)(?=$|\s|[^\w])/i) ||
+      text.match(/(?:수량|불량\s*수)\s*[:=\-]?\s*(\d+(?:[.,]\d+)?)/i);
+    if (qtyMatch) {
+      record.quantity = qtyMatch[2]
+        ? `${qtyMatch[1]}${qtyMatch[2]}`
+        : qtyMatch[1];
+      text = text.replace(qtyMatch[0], " ").trim();
+    }
+  }
+
+  // Lot leftovers
+  if (!record.lot) {
+    const lotMatch = text.match(/\b((?:LOT|로트)[-_]?\w+)\b/i);
+    if (lotMatch) {
+      record.lot = lotMatch[1];
+      text = text.replace(lotMatch[0], " ").trim();
+    }
+  }
+
+  text = text.replace(/\s+/g, " ").replace(/^[\s,./|]+|[\s,./|]+$/g, "").trim();
+  if (!text) return;
+
+  // "테스트 브라켓 상단부 스크래치 발생"
+  const defectIdx = text.search(DEFECT_WORD);
+  if (defectIdx > 0 && (!record.productName || !record.defect)) {
+    let productPart = text.slice(0, defectIdx).trim();
+    let defectPart = text.slice(defectIdx).trim();
+
+    // Pull trailing location word from product into defect
+    const locAtEnd = productPart.match(
+      new RegExp(`^(.*?)\\s+(${LOCATION_WORD.source})$`),
+    );
+    if (locAtEnd && locAtEnd[1].trim()) {
+      productPart = locAtEnd[1].trim();
+      defectPart = `${locAtEnd[2]} ${defectPart}`.replace(/\s+/g, " ").trim();
+    }
+
+    if (!record.productName && productPart) record.productName = productPart;
+    if (!record.defect && defectPart) {
+      record.defect = defectPart.replace(/\s+/g, " ").trim();
+    } else if (
+      record.defect &&
+      !record.productName &&
+      productPart &&
+      record.defect.includes(productPart)
+    ) {
+      // Replace overly broad defect filled earlier
+      record.productName = productPart;
+      record.defect = defectPart.replace(/\s+/g, " ").trim();
+    }
+  } else if (!record.defect && !record.productName && DEFECT_WORD.test(text)) {
+    record.defect = text;
+  } else if (
+    !record.productName &&
+    !record.defect &&
+    text.length <= 80 &&
+    !record.note
+  ) {
+    record.note = text;
+  } else if (
+    record.productName &&
+    record.defect &&
+    !record.note &&
+    text &&
+    text !== record.productName &&
+    text !== record.defect
+  ) {
+    // leftover prose after structured fields
+    if (!text.includes(record.productName) || text.length > record.raw.length) {
+      /* keep quiet — usually residual fragments */
+    }
+  }
+}
+
 function parseBlock(block: string): NcrRecord {
   const record = emptyNcr({ raw: block });
   const leftover = applyLabeledFields(block, record);
   applyDelimitedGuess(leftover, record);
+
+  const needsNatural =
+    !record.productName ||
+    !record.defect ||
+    !record.process ||
+    !record.quantity;
+  if (needsNatural) {
+    applyNaturalLanguageGuess(leftover, record);
+  }
 
   if (record.quantity) {
     record.quantity = record.quantity.replace(/\s+/g, " ").trim();
