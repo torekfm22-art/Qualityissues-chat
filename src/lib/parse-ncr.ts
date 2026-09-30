@@ -5,9 +5,15 @@ type FieldKey = keyof Omit<NcrRecord, "id" | "raw">;
 /** Field label synonyms commonly used in Korean QC chats */
 const FIELD_PATTERNS: { key: FieldKey; patterns: RegExp[] }[] = [
   {
+    key: "vehicleModel",
+    patterns: [
+      /^(?:차\s*종|모델(?:\s*명)?|기종|vehicle\s*model|car\s*model)\s*[:=\-–>]?\s*(.+)$/i,
+    ],
+  },
+  {
     key: "productName",
     patterns: [
-      /^(?:품\s*명|제품명|제품|품목|모델명|model)\s*[:=\-–>]?\s*(.+)$/i,
+      /^(?:품\s*명|제품명|제품|품목)\s*[:=\-–>]?\s*(.+)$/i,
     ],
   },
   {
@@ -359,14 +365,13 @@ function applyPlantReportFormat(block: string, record: NcrRecord): boolean {
 
   const content = contentLines.join(" ").replace(/\s+/g, " ").trim();
   // JG1 ICCU 하우징 볼트 설체결  |  SG2 ICCU 기밀검사 NG
+  // 차종(JG1) + 품명(ICCU) + 불량…
   const coded = content.match(
     /^([A-Z]{1,4}\d+[A-Z]?)\s+([A-Za-z0-9_-]+)\s*[,，]?\s*(.+)$/,
   );
   if (coded) {
-    if (!record.partNumber) record.partNumber = coded[1];
-    if (!record.productName) {
-      record.productName = `${coded[1]} ${coded[2]}`.trim();
-    }
+    if (!record.vehicleModel) record.vehicleModel = coded[1];
+    if (!record.productName) record.productName = coded[2];
     if (!record.defect) record.defect = coded[3].replace(/^[,，]\s*/, "").trim();
   } else if (content) {
     const ngSplit = content.match(/^(.+?)\s+((?:.+ )?NG|.+)$/i);
@@ -575,6 +580,7 @@ export function parseChatToNcr(text: string): NcrRecord[] {
  */
 export function isConfidentNcrRecord(r: NcrRecord): boolean {
   const hasProduct = Boolean(r.productName?.trim());
+  const hasModel = Boolean(r.vehicleModel?.trim());
   const defectText = r.defect?.trim() || "";
   const hasDefectText = Boolean(defectText);
   const hasDefectWord = hasDefectText && DEFECT_WORD.test(defectText);
@@ -584,13 +590,13 @@ export function isConfidentNcrRecord(r: NcrRecord): boolean {
   const hasLot = Boolean(r.lot?.trim());
   const hasAction = Boolean(r.action?.trim());
 
-  // Plant format: #N공정 + qty + (product/defect body)
+  // Plant format: #N공정 + qty + (차종/품명/불량 body)
   const plantShape =
     /^#?\s*\d+\s*공정/m.test(r.raw) &&
     /\d+\s*(?:ea|EA|개)\b/i.test(r.raw) &&
     hasProcess &&
     hasQty &&
-    (hasProduct || hasDefectText);
+    (hasProduct || hasDefectText || hasModel);
   if (plantShape) return true;
 
   // Explicit labels in raw text are strong

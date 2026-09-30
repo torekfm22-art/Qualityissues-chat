@@ -251,7 +251,7 @@ export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
               </li>
             </ul>
             <div className="mt-auto rounded-xl border border-dashed border-[var(--steel-mid)]/30 bg-white/50 p-3 text-xs text-[var(--ink-muted)]">
-              인식 필드: 발생일시, 보고자, 품명, 품번, 불량 현상, 공정번호,
+              인식 필드: 발생일시, 보고자, 차종, 품명, 품번, 불량 현상, 공정번호,
               수량, 로트, 라인/설비, 조치내용, 비고
             </div>
           </aside>

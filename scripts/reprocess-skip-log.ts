@@ -59,6 +59,7 @@ async function main() {
       i,
       ok: true,
       inserted: res.inserted,
+      model: parsed[0].vehicleModel,
       product: parsed[0].productName,
       defect: parsed[0].defect,
       process: parsed[0].process,

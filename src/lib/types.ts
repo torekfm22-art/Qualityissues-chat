@@ -1,6 +1,7 @@
 export type NcrFieldKey =
   | "occurredAt"
   | "reporter"
+  | "vehicleModel"
   | "productName"
   | "partNumber"
   | "defect"
@@ -15,6 +16,8 @@ export interface NcrRecord {
   id: string;
   occurredAt: string;
   reporter: string;
+  /** 차종 / 모델 코드 (예: JG1, SG2) */
+  vehicleModel: string;
   productName: string;
   partNumber: string;
   defect: string;
@@ -34,6 +37,7 @@ export const NCR_COLUMNS: {
 }[] = [
   { key: "occurredAt", label: "발생일시", short: "일시" },
   { key: "reporter", label: "보고자", short: "보고자" },
+  { key: "vehicleModel", label: "차종", short: "차종" },
   { key: "productName", label: "품명", short: "품명" },
   { key: "partNumber", label: "품번", short: "품번" },
   { key: "defect", label: "불량 현상", short: "현상" },
@@ -50,6 +54,7 @@ export function emptyNcr(partial?: Partial<NcrRecord>): NcrRecord {
     id: partial?.id ?? crypto.randomUUID(),
     occurredAt: "",
     reporter: "",
+    vehicleModel: "",
     productName: "",
     partNumber: "",
     defect: "",

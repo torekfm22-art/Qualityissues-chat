@@ -76,7 +76,7 @@ export async function buildNcrExcelBuffer(
     });
   });
 
-  const widths = [6, 10, 16, 16, 10, 22, 14, 28, 14, 10, 16, 12, 20, 16, 40];
+  const widths = [6, 10, 16, 16, 10, 10, 22, 14, 28, 14, 10, 16, 12, 20, 16, 40];
   widths.forEach((w, i) => {
     sheet.getColumn(i + 1).width = w;
   });
@@ -101,6 +101,7 @@ export function flattenMessagesToRecords(
               id: m.id,
               occurredAt: m.receivedAt,
               reporter: m.sender,
+              vehicleModel: "",
               productName: "",
               partNumber: "",
               defect: "",

@@ -841,6 +841,7 @@ function emptyShell(m: StoredMessage) {
     id: m.id,
     occurredAt: formatKstDisplay(m.receivedAt),
     reporter: m.sender,
+    vehicleModel: "",
     productName: "",
     partNumber: "",
     defect: "",
