@@ -1,5 +1,5 @@
-import { NcrWorkspace } from "@/components/ncr-workspace";
+import { SyncDashboard } from "@/components/sync-dashboard";
 
 export default function Home() {
-  return <NcrWorkspace />;
+  return <SyncDashboard />;
 }

@@ -27,7 +27,7 @@ import { exportNcrToExcel } from "@/lib/export-excel";
 import { parseChatToNcr, SAMPLE_CHAT } from "@/lib/parse-ncr";
 import { emptyNcr, NCR_COLUMNS, type NcrRecord } from "@/lib/types";
 
-export function NcrWorkspace() {
+export function NcrWorkspace({ embedded = false }: { embedded?: boolean }) {
   const [chat, setChat] = useState("");
   const [records, setRecords] = useState<NcrRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -104,34 +104,44 @@ export function NcrWorkspace() {
   }
 
   return (
-    <div className="relative min-h-full">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-        <div className="absolute -left-24 top-0 h-72 w-72 rounded-full bg-[var(--accent-amber)]/15 blur-3xl" />
-        <div className="absolute right-0 top-40 h-96 w-96 rounded-full bg-[var(--steel-mid)]/20 blur-3xl" />
-        <div className="qc-grid absolute inset-0 opacity-[0.35]" />
-      </div>
+    <div className={embedded ? "relative" : "relative min-h-full"}>
+      {!embedded && (
+        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+          <div className="absolute -left-24 top-0 h-72 w-72 rounded-full bg-[var(--accent-amber)]/15 blur-3xl" />
+          <div className="absolute right-0 top-40 h-96 w-96 rounded-full bg-[var(--steel-mid)]/20 blur-3xl" />
+          <div className="qc-grid absolute inset-0 opacity-[0.35]" />
+        </div>
+      )}
 
-      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 sm:py-10">
-        <header className="animate-fade-up flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--steel-deep)] text-[var(--accent-amber)] shadow-lg shadow-[var(--steel-deep)]/25">
-              <FileSpreadsheet className="h-5 w-5" strokeWidth={2.25} />
+      <div
+        className={
+          embedded
+            ? "relative flex w-full flex-col gap-6 px-2 py-2 sm:px-3"
+            : "relative mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6 sm:py-10"
+        }
+      >
+        {!embedded && (
+          <header className="animate-fade-up flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--steel-deep)] text-[var(--accent-amber)] shadow-lg shadow-[var(--steel-deep)]/25">
+                <FileSpreadsheet className="h-5 w-5" strokeWidth={2.25} />
+              </div>
+              <div>
+                <p className="text-xs font-semibold tracking-[0.18em] text-[var(--steel-mid)] uppercase">
+                  Quality Field Tool
+                </p>
+                <h1 className="font-display text-3xl font-bold tracking-tight text-[var(--steel-deep)] sm:text-4xl">
+                  품질톡 정리기
+                </h1>
+              </div>
             </div>
-            <div>
-              <p className="text-xs font-semibold tracking-[0.18em] text-[var(--steel-mid)] uppercase">
-                Quality Field Tool
-              </p>
-              <h1 className="font-display text-3xl font-bold tracking-tight text-[var(--steel-deep)] sm:text-4xl">
-                품질톡 정리기
-              </h1>
-            </div>
-          </div>
-          <p className="max-w-2xl text-[15px] leading-relaxed text-[var(--ink-muted)]">
-            카카오톡·텔레그램 등 메신저에 올린 품질 부적합 톡을 붙여넣으면
-            품명, 불량 현상, 공정번호, 수량 등을 표로 정리하고 엑셀로
-            내려받습니다.
-          </p>
-        </header>
+            <p className="max-w-2xl text-[15px] leading-relaxed text-[var(--ink-muted)]">
+              카카오톡·텔레그램 등 메신저에 올린 품질 부적합 톡을 붙여넣으면
+              품명, 불량 현상, 공정번호, 수량 등을 표로 정리하고 엑셀로
+              내려받습니다.
+            </p>
+          </header>
+        )}
 
         <section className="animate-fade-up-delay grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-2xl border border-[var(--panel-border)] bg-[var(--panel)]/90 p-4 shadow-sm backdrop-blur-sm sm:p-5">
@@ -350,10 +360,12 @@ export function NcrWorkspace() {
           )}
         </section>
 
-        <footer className="pb-6 text-center text-xs text-[var(--ink-muted)]">
-          현장 메신저 톡 → 표 정리 → 엑셀. 데이터는 브라우저에서만 처리되며
-          서버로 전송되지 않습니다.
-        </footer>
+        {!embedded && (
+          <footer className="pb-6 text-center text-xs text-[var(--ink-muted)]">
+            현장 메신저 톡 → 표 정리 → 엑셀. 데이터는 브라우저에서만 처리되며
+            서버로 전송되지 않습니다.
+          </footer>
+        )}
       </div>
 
       {toast && (
