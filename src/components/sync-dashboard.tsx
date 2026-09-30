@@ -247,6 +247,7 @@ export function SyncDashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "수집 실패");
       await loadMessages(dayKey);
+      if (Array.isArray(data.discovered)) setDiscovered(data.discovered);
       showToast(
         `텔레그램 수집: 신규 ${data.inserted}건 / 처리 ${data.processed}건`,
       );
