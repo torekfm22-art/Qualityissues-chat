@@ -28,15 +28,15 @@ TELEGRAM_BOT_TOKEN=xxxxx npm run collector
 
 웹 UI와 워커를 함께 켜 두면, 채팅방 톡이 쌓이고 설정한 KST 시각 이후 일일 엑셀이 `data/exports/` 에 저장됩니다.
 
-## 텔레그램 설정 요약
+## 텔레그램 설정 (주 연동 방식)
 
-1. `@BotFather`에서 봇 생성 → 토큰 발급  
-2. 품질 부적합 방에 봇 초대 (필요 시 privacy mode 비활성)  
-3. UI **텔레그램 연동** 탭에 토큰/채팅방 ID 저장  
-4. **지금 수집** 또는 `npm run collector` 실행  
-5. **오늘 엑셀 다운로드**로 확인  
+상세 절차는 [docs/TELEGRAM.md](./docs/TELEGRAM.md) 를 보세요.
 
-웹훅(공개 HTTPS 필요): `/api/telegram/webhook`
+1. `@BotFather` → 봇 생성 → `/setprivacy` **Disable**  
+2. 품질 부적합 그룹에 봇 초대  
+3. UI **텔레그램 연동**에 토큰 저장 → 채팅방 ID 검색  
+4. `npm run collector` (로컬 폴링) 또는 웹훅 등록  
+5. **오늘 엑셀 다운로드** / `data/exports/`
 
 ## 카카오톡
 

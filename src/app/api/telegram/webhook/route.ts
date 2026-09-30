@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSettings } from "@/lib/store";
+import { getSettings, resolveBotToken } from "@/lib/store";
 import { ingestTelegramMessage, type TelegramUpdate } from "@/lib/telegram";
 import { maybeRunScheduledDailyExport } from "@/lib/daily-export";
 
@@ -7,7 +7,8 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   const settings = getSettings();
-  const secret = settings.telegramWebhookSecret || process.env.TELEGRAM_WEBHOOK_SECRET;
+  const secret =
+    settings.telegramWebhookSecret || process.env.TELEGRAM_WEBHOOK_SECRET;
   if (secret) {
     const header = request.headers.get("x-telegram-bot-api-secret-token");
     if (header !== secret) {
@@ -19,7 +20,10 @@ export async function POST(request: Request) {
   const msg = update.message || update.channel_post;
   if (!msg) return NextResponse.json({ ok: true, skipped: "no_message" });
 
-  const result = ingestTelegramMessage(msg);
+  const token = resolveBotToken(settings);
+  const result = ingestTelegramMessage(msg, "telegram", {
+    tokenForAck: token || undefined,
+  });
   await maybeRunScheduledDailyExport();
 
   return NextResponse.json({

@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/table";
 import { NcrWorkspace } from "@/components/ncr-workspace";
 import { formatKstDisplay } from "@/lib/date-kst";
-import type { StoredMessage } from "@/lib/models";
+import type { DiscoveredChat, StoredMessage } from "@/lib/models";
 import { NCR_COLUMNS } from "@/lib/types";
 
 type SettingsResponse = {
@@ -39,11 +39,19 @@ type SettingsResponse = {
     telegramWebhookSecret: string;
     exportHourKst: number;
     autoExportEnabled: boolean;
+    replyOnIngest: boolean;
     hasToken: boolean;
     tokenFromEnv: boolean;
+    discoveredChats: DiscoveredChat[];
   };
   bot: { id: number; username?: string; first_name: string } | null;
   botError: string | null;
+};
+
+type WebhookInfo = {
+  url: string;
+  pending_update_count: number;
+  last_error_message?: string;
 };
 
 export function SyncDashboard() {
@@ -59,6 +67,10 @@ export function SyncDashboard() {
   const [chatIdsInput, setChatIdsInput] = useState("");
   const [exportHour, setExportHour] = useState(23);
   const [autoExport, setAutoExport] = useState(true);
+  const [replyOnIngest, setReplyOnIngest] = useState(true);
+  const [discovered, setDiscovered] = useState<DiscoveredChat[]>([]);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +98,15 @@ export function SyncDashboard() {
     setChatIdsInput(data.settings.telegramChatIds.join(", "));
     setExportHour(data.settings.exportHourKst);
     setAutoExport(data.settings.autoExportEnabled);
+    setReplyOnIngest(data.settings.replyOnIngest ?? true);
+    setDiscovered(data.settings.discoveredChats || []);
+  }, []);
+
+  const loadWebhookInfo = useCallback(async () => {
+    const res = await fetch("/api/telegram/webhook/setup");
+    const data = await res.json();
+    if (res.ok) setWebhookInfo(data.info);
+    else setWebhookInfo(null);
   }, []);
 
   useEffect(() => {
@@ -109,6 +130,11 @@ export function SyncDashboard() {
       setChatIdsInput(setData.settings.telegramChatIds.join(", "));
       setExportHour(setData.settings.exportHourKst);
       setAutoExport(setData.settings.autoExportEnabled);
+      setReplyOnIngest(setData.settings.replyOnIngest ?? true);
+      setDiscovered(setData.settings.discoveredChats || []);
+      if (typeof window !== "undefined" && !webhookUrl) {
+        setWebhookUrl(`${window.location.origin}/api/telegram/webhook`);
+      }
     };
     void refresh();
     const id = window.setInterval(() => {
@@ -119,7 +145,7 @@ export function SyncDashboard() {
       window.clearInterval(id);
     };
     // Initial hydrate + poll; dayKey changes are handled by the date input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount hydrate once, interval uses latest dayKey via closure refresh on interval only
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount hydrate once
   }, [loadMessages]);
 
   async function saveSettings() {
@@ -137,15 +163,77 @@ export function SyncDashboard() {
             .filter(Boolean),
           exportHourKst: exportHour,
           autoExportEnabled: autoExport,
+          replyOnIngest,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "저장 실패");
       setTokenInput("");
       await loadSettings();
+      if (data.settings?.hasToken) void loadWebhookInfo();
       showToast("설정이 저장되었습니다");
     } catch (e) {
       setError(e instanceof Error ? e.message : "설정 저장 실패");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function discoverChats() {
+    setBusy("chats");
+    setError(null);
+    try {
+      const res = await fetch("/api/telegram/chats", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "채팅방 검색 실패");
+      setDiscovered(data.chats || []);
+      await loadMessages(dayKey);
+      showToast(
+        data.chats?.length
+          ? `채팅방 ${data.chats.length}개 발견 · 신규 수집 ${data.inserted ?? 0}건`
+          : "아직 방이 없습니다. 봇이 있는 방에 메시지를 보낸 뒤 다시 검색하세요.",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "채팅방 검색 실패");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function addChatId(chatId: string) {
+    const ids = new Set(
+      chatIdsInput
+        .split(/[,\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    ids.add(chatId);
+    setChatIdsInput([...ids].join(", "));
+    showToast(`허용 목록에 ${chatId} 추가됨 — 설정 저장을 눌러 주세요`);
+  }
+
+  async function setupWebhook(action: "set" | "delete") {
+    setBusy("webhook");
+    setError(null);
+    try {
+      const res = await fetch("/api/telegram/webhook/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          url: action === "set" ? webhookUrl : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "웹훅 설정 실패");
+      setWebhookInfo(data.info);
+      showToast(
+        action === "set"
+          ? "웹훅이 등록되었습니다"
+          : "웹훅이 해제되었습니다 (폴링 사용 가능)",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "웹훅 설정 실패");
     } finally {
       setBusy(null);
     }
@@ -287,10 +375,10 @@ export function SyncDashboard() {
           </div>
         )}
 
-        <Tabs defaultValue="today" className="animate-fade-up-delay gap-4">
+        <Tabs defaultValue="telegram" className="animate-fade-up-delay gap-4">
           <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-[var(--panel-soft)] p-1">
-            <TabsTrigger value="today">오늘 수집</TabsTrigger>
             <TabsTrigger value="telegram">텔레그램 연동</TabsTrigger>
+            <TabsTrigger value="today">오늘 수집</TabsTrigger>
             <TabsTrigger value="kakao">카카오톡</TabsTrigger>
             <TabsTrigger value="manual">수동 붙여넣기</TabsTrigger>
           </TabsList>
@@ -403,27 +491,48 @@ export function SyncDashboard() {
 
           <TabsContent value="telegram" className="space-y-4">
             <section className="rounded-2xl border border-[var(--panel-border)] bg-[var(--panel)]/95 p-4 sm:p-5">
-              <div className="mb-4 flex items-center gap-2">
-                <Bot className="h-4 w-4 text-[var(--steel-mid)]" />
-                <h2 className="font-display text-lg font-semibold text-[var(--steel-deep)]">
-                  텔레그램 봇 연결
-                </h2>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Bot className="h-4 w-4 text-[var(--steel-mid)]" />
+                  <h2 className="font-display text-lg font-semibold text-[var(--steel-deep)]">
+                    텔레그램으로 시작하기
+                  </h2>
+                </div>
+                <Badge
+                  className={
+                    settings?.hasToken
+                      ? "bg-emerald-700 text-white"
+                      : "bg-[var(--steel-mid)] text-white"
+                  }
+                >
+                  {settings?.hasToken
+                    ? bot?.username
+                      ? `@${bot.username} 연결됨`
+                      : "토큰 저장됨"
+                    : "토큰 필요"}
+                </Badge>
               </div>
 
-              <ol className="mb-5 list-decimal space-y-1.5 pl-5 text-sm text-[var(--ink-muted)]">
+              <ol className="mb-5 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--ink-muted)]">
                 <li>
-                  Telegram에서 <code className="rounded bg-[var(--panel-soft)] px-1">@BotFather</code>로
+                  Telegram에서{" "}
+                  <code className="rounded bg-[var(--panel-soft)] px-1">@BotFather</code>
+                  → <code className="rounded bg-[var(--panel-soft)] px-1">/newbot</code>으로
                   봇을 만들고 토큰을 복사합니다.
                 </li>
-                <li>품질 부적합 채팅방에 봇을 초대합니다.</li>
                 <li>
-                  그룹에서 봇이 메시지를 읽도록 관리자 권한(메시지 읽기)을 주거나,
-                  privacy mode를 BotFather에서 끕니다.
+                  BotFather에서{" "}
+                  <code className="rounded bg-[var(--panel-soft)] px-1">/setprivacy</code> →
+                  Disable (그룹 일반 메시지를 읽으려면 필수).
                 </li>
+                <li>품질 부적합 그룹에 봇을 초대합니다.</li>
+                <li>토큰을 저장한 뒤, 방에 테스트 메시지를 보내고 채팅방 ID를 검색합니다.</li>
                 <li>
-                  아래 토큰을 저장한 뒤 <strong>지금 수집</strong>을 누르거나,
-                  서버에서 <code className="rounded bg-[var(--panel-soft)] px-1">npm run collector</code>를
-                  상시 실행합니다.
+                  로컬/사내는{" "}
+                  <code className="rounded bg-[var(--panel-soft)] px-1">
+                    npm run collector
+                  </code>
+                  를 상시 실행하거나, 공개 HTTPS가 있으면 웹훅을 등록합니다.
                 </li>
               </ol>
 
@@ -436,7 +545,7 @@ export function SyncDashboard() {
                     placeholder={
                       settings?.hasToken
                         ? "저장됨 — 변경 시에만 입력"
-                        : "123456:ABC..."
+                        : "123456:AA..."
                     }
                     value={tokenInput}
                     onChange={(e) => setTokenInput(e.target.value)}
@@ -457,16 +566,27 @@ export function SyncDashboard() {
                   )}
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="chats">허용 채팅방 ID (쉼표 구분, 비우면 전체)</Label>
+                  <Label htmlFor="chats">허용 채팅방 ID (비우면 모든 방)</Label>
                   <Input
                     id="chats"
                     placeholder="-1001234567890"
                     value={chatIdsInput}
                     onChange={(e) => setChatIdsInput(e.target.value)}
                   />
-                  <p className="text-xs text-[var(--ink-muted)]">
-                    그룹 ID는 메시지 수집 로그·@userinfobot 등으로 확인할 수 있습니다.
-                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void discoverChats()}
+                    disabled={!!busy || !settings?.hasToken}
+                  >
+                    {busy === "chats" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    채팅방 ID 검색
+                  </Button>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="hour">일일 엑셀 마감 시각 (KST)</Label>
@@ -479,18 +599,68 @@ export function SyncDashboard() {
                     onChange={(e) => setExportHour(Number(e.target.value))}
                   />
                 </div>
-                <div className="flex items-center justify-between rounded-xl border border-[var(--panel-border)] bg-[var(--panel-soft)]/60 px-3 py-3">
-                  <div>
-                    <p className="text-sm font-medium text-[var(--steel-deep)]">
-                      자동 일일 엑셀
-                    </p>
-                    <p className="text-xs text-[var(--ink-muted)]">
-                      마감 시각 이후 data/exports 에 저장
-                    </p>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between rounded-xl border border-[var(--panel-border)] bg-[var(--panel-soft)]/60 px-3 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-[var(--steel-deep)]">
+                        자동 일일 엑셀
+                      </p>
+                      <p className="text-xs text-[var(--ink-muted)]">
+                        마감 시각 이후 data/exports 저장
+                      </p>
+                    </div>
+                    <Switch checked={autoExport} onCheckedChange={setAutoExport} />
                   </div>
-                  <Switch checked={autoExport} onCheckedChange={setAutoExport} />
+                  <div className="flex items-center justify-between rounded-xl border border-[var(--panel-border)] bg-[var(--panel-soft)]/60 px-3 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-[var(--steel-deep)]">
+                        수집 확인 답장
+                      </p>
+                      <p className="text-xs text-[var(--ink-muted)]">
+                        부적합 인식 시 방에 ✅ 회신
+                      </p>
+                    </div>
+                    <Switch
+                      checked={replyOnIngest}
+                      onCheckedChange={setReplyOnIngest}
+                    />
+                  </div>
                 </div>
               </div>
+
+              {discovered.length > 0 && (
+                <div className="mt-4 rounded-xl border border-[var(--panel-border)] bg-[var(--panel-soft)]/40 p-3">
+                  <p className="mb-2 text-sm font-medium text-[var(--steel-deep)]">
+                    발견된 채팅방
+                  </p>
+                  <ul className="space-y-2">
+                    {discovered.map((c) => (
+                      <li
+                        key={c.chatId}
+                        className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                      >
+                        <span>
+                          <span className="font-medium text-[var(--steel-deep)]">
+                            {c.title}
+                          </span>{" "}
+                          <code className="text-xs text-[var(--ink-muted)]">
+                            {c.chatId}
+                          </code>{" "}
+                          <Badge variant="secondary">{c.type}</Badge>
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => addChatId(c.chatId)}
+                        >
+                          허용에 추가
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button
@@ -511,15 +681,70 @@ export function SyncDashboard() {
                   ) : (
                     <RefreshCw className="h-4 w-4" />
                   )}
-                  지금 수집 (getUpdates)
+                  지금 수집
                 </Button>
               </div>
 
-              <div className="mt-4 rounded-xl border border-dashed border-[var(--steel-mid)]/30 bg-[var(--panel-soft)]/50 p-3 text-xs leading-relaxed text-[var(--ink-muted)]">
-                웹훅 사용 시: 공개 HTTPS URL의{" "}
-                <code>/api/telegram/webhook</code> 을 Telegram{" "}
-                <code>setWebhook</code> 에 등록하세요. 로컬·사내는{" "}
-                <code>npm run collector</code> 장기 폴링을 권장합니다.
+              <div className="mt-5 space-y-3 rounded-xl border border-dashed border-[var(--steel-mid)]/30 bg-[var(--panel-soft)]/50 p-3">
+                <p className="text-sm font-medium text-[var(--steel-deep)]">
+                  수집 방식
+                </p>
+                <p className="text-xs leading-relaxed text-[var(--ink-muted)]">
+                  <strong className="text-[var(--steel-deep)]">추천 (로컬/사내):</strong>{" "}
+                  <code>TELEGRAM_BOT_TOKEN=... npm run collector</code> — 웹훅 없이
+                  폴링합니다. 웹훅이 등록되어 있으면 폴링이 막히므로 아래에서 해제하세요.
+                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="webhook">웹훅 URL (공개 HTTPS만)</Label>
+                  <Input
+                    id="webhook"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://your-host/api/telegram/webhook"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={!!busy || !settings?.hasToken}
+                      onClick={() => void setupWebhook("set")}
+                    >
+                      웹훅 등록
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={!!busy || !settings?.hasToken}
+                      onClick={() => void setupWebhook("delete")}
+                    >
+                      웹훅 해제 (폴링용)
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={!!busy || !settings?.hasToken}
+                      onClick={() => void loadWebhookInfo()}
+                    >
+                      상태 새로고침
+                    </Button>
+                  </div>
+                  {webhookInfo && (
+                    <p className="text-xs text-[var(--ink-muted)]">
+                      현재 웹훅:{" "}
+                      {webhookInfo.url ? (
+                        <code>{webhookInfo.url}</code>
+                      ) : (
+                        "없음 (폴링 가능)"
+                      )}
+                      {webhookInfo.last_error_message
+                        ? ` · 오류: ${webhookInfo.last_error_message}`
+                        : ""}
+                    </p>
+                  )}
+                </div>
               </div>
             </section>
           </TabsContent>

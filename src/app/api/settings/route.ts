@@ -42,6 +42,9 @@ export async function PUT(request: Request) {
   if (typeof body.autoExportEnabled === "boolean") {
     patch.autoExportEnabled = body.autoExportEnabled;
   }
+  if (typeof body.replyOnIngest === "boolean") {
+    patch.replyOnIngest = body.replyOnIngest;
+  }
   if (Array.isArray(body.telegramChatIds)) {
     patch.telegramChatIds = body.telegramChatIds
       .map((v) => String(v).trim())

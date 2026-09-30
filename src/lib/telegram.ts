@@ -1,8 +1,13 @@
 import { dayKeyKst, formatKstDisplay } from "./date-kst";
 import { parseChatToNcr } from "./parse-ncr";
 import { emptyNcr } from "./types";
-import type { MessageSource, StoredMessage } from "./models";
-import { getSettings, resolveBotToken, upsertMessage } from "./store";
+import type { DiscoveredChat, MessageSource, StoredMessage } from "./models";
+import {
+  getSettings,
+  resolveBotToken,
+  updateSettings,
+  upsertMessage,
+} from "./store";
 
 const TG_API = "https://api.telegram.org";
 
@@ -19,13 +24,30 @@ export interface TelegramMessage {
   text?: string;
   caption?: string;
   chat: { id: number; title?: string; type: string; username?: string };
-  from?: { id: number; first_name?: string; last_name?: string; username?: string };
+  from?: {
+    id: number;
+    first_name?: string;
+    last_name?: string;
+    username?: string;
+  };
+}
+
+export interface WebhookInfo {
+  url: string;
+  has_custom_certificate: boolean;
+  pending_update_count: number;
+  last_error_date?: number;
+  last_error_message?: string;
+  max_connections?: number;
+  ip_address?: string;
 }
 
 function senderName(msg: TelegramMessage): string {
   const f = msg.from;
   if (!f) return "";
-  return [f.first_name, f.last_name].filter(Boolean).join(" ") || f.username || "";
+  return (
+    [f.first_name, f.last_name].filter(Boolean).join(" ") || f.username || ""
+  );
 }
 
 export async function telegramApi<T>(
@@ -39,25 +61,72 @@ export async function telegramApi<T>(
     body: body ? JSON.stringify(body) : undefined,
     cache: "no-store",
   });
-  const json = (await res.json()) as { ok: boolean; description?: string; result: T };
+  const json = (await res.json()) as {
+    ok: boolean;
+    description?: string;
+    result: T;
+  };
   if (!json.ok) {
     throw new Error(json.description || `Telegram API ${method} failed`);
   }
   return json.result;
 }
 
-export function isAllowedChat(chatId: string | number, allowed: string[]): boolean {
+export function isAllowedChat(
+  chatId: string | number,
+  allowed: string[],
+): boolean {
   if (!allowed.length) return true;
   const id = String(chatId);
   return allowed.some((a) => a.trim() === id);
 }
 
+export function rememberChat(msg: TelegramMessage): DiscoveredChat {
+  const chat: DiscoveredChat = {
+    chatId: String(msg.chat.id),
+    title: msg.chat.title || msg.chat.username || String(msg.chat.id),
+    type: msg.chat.type,
+    lastSeenAt: new Date(msg.date * 1000).toISOString(),
+  };
+  const settings = getSettings();
+  const others = settings.discoveredChats.filter((c) => c.chatId !== chat.chatId);
+  updateSettings({ discoveredChats: [chat, ...others].slice(0, 50) });
+  return chat;
+}
+
+async function maybeAckIngest(
+  token: string,
+  msg: TelegramMessage,
+  ncrCount: number,
+) {
+  const settings = getSettings();
+  if (!settings.replyOnIngest) return;
+  try {
+    await telegramApi(token, "sendMessage", {
+      chat_id: msg.chat.id,
+      text: `✅ 품질부적합 ${ncrCount}건 수집됨 (일일 엑셀에 반영)`,
+      reply_to_message_id: msg.message_id,
+      disable_notification: true,
+    });
+  } catch {
+    // Ack failure must not block ingest
+  }
+}
+
 export function ingestTelegramMessage(
   msg: TelegramMessage,
   source: MessageSource = "telegram",
+  opts?: { tokenForAck?: string },
 ): { inserted: boolean; message: StoredMessage | null; skipped?: string } {
+  rememberChat(msg);
+
   const text = (msg.text || msg.caption || "").trim();
   if (!text) return { inserted: false, message: null, skipped: "empty" };
+
+  // Ignore bot command noise except /ncr style content after command
+  if (/^\/(start|help|settings)\b/i.test(text)) {
+    return { inserted: false, message: null, skipped: "command" };
+  }
 
   const settings = getSettings();
   const chatId = String(msg.chat.id);
@@ -71,7 +140,6 @@ export function ingestTelegramMessage(
     `${sender ? `${sender} ${formatKstDisplay(receivedAt)}\n` : ""}${text}`,
   );
 
-  // If free-form QC keywords exist but parser returned empty, keep one shell record
   const looksLikeQc =
     /품명|불량|공정|부적합|NCR|로트|수량|스크래치|치수|찍힘|휨/i.test(text);
   const records =
@@ -105,7 +173,11 @@ export function ingestTelegramMessage(
     parsed: records,
   };
 
-  return upsertMessage(stored);
+  const result = upsertMessage(stored);
+  if (result.inserted && opts?.tokenForAck) {
+    void maybeAckIngest(opts.tokenForAck, msg, records.length);
+  }
+  return result;
 }
 
 export async function pollTelegramUpdates(limit = 50): Promise<{
@@ -113,6 +185,7 @@ export async function pollTelegramUpdates(limit = 50): Promise<{
   inserted: number;
   skipped: number;
   lastUpdateId: number;
+  discovered: DiscoveredChat[];
 }> {
   const settings = getSettings();
   const token = resolveBotToken(settings);
@@ -140,13 +213,12 @@ export async function pollTelegramUpdates(limit = 50): Promise<{
       skipped++;
       continue;
     }
-    const result = ingestTelegramMessage(msg);
+    const result = ingestTelegramMessage(msg, "telegram", { tokenForAck: token });
     if (result.inserted) inserted++;
     else skipped++;
   }
 
   if (lastUpdateId !== settings.lastPollUpdateId) {
-    const { updateSettings } = await import("./store");
     updateSettings({ lastPollUpdateId: lastUpdateId });
   }
 
@@ -155,6 +227,7 @@ export async function pollTelegramUpdates(limit = 50): Promise<{
     inserted,
     skipped,
     lastUpdateId,
+    discovered: getSettings().discoveredChats,
   };
 }
 
@@ -163,4 +236,27 @@ export async function getBotProfile(token: string) {
     token,
     "getMe",
   );
+}
+
+export async function getWebhookInfo(token: string) {
+  return telegramApi<WebhookInfo>(token, "getWebhookInfo");
+}
+
+export async function setWebhook(
+  token: string,
+  url: string,
+  secret?: string,
+) {
+  return telegramApi<boolean>(token, "setWebhook", {
+    url,
+    secret_token: secret || undefined,
+    allowed_updates: ["message", "channel_post"],
+    drop_pending_updates: false,
+  });
+}
+
+export async function deleteWebhook(token: string) {
+  return telegramApi<boolean>(token, "deleteWebhook", {
+    drop_pending_updates: false,
+  });
 }
