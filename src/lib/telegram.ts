@@ -11,6 +11,11 @@ import {
   updateSettings,
   upsertMessage,
 } from "./store";
+import {
+  getLexicon,
+  learnedProductNames,
+  learnedVehicleModels,
+} from "./training";
 import { appendFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
 
@@ -166,7 +171,13 @@ export async function ingestTelegramMessage(
   const chatTitle = msg.chat.title || msg.chat.username || String(msg.chat.id);
 
   // Busy group filter: ignore chitchat / unrelated talk early
-  const relevance = scoreQualityMessage(text);
+  // Include learned lexicon so confirmed field terms raise QC score over time
+  const lexicon = getLexicon();
+  const relevance = scoreQualityMessage(text, {
+    extraDefectTerms: lexicon.defectTerms,
+    learnedVehicleModels: learnedVehicleModels(),
+    learnedProductNames: learnedProductNames(),
+  });
   if (relevance.score < QC_INGEST_SCORE_THRESHOLD) {
     const skipped = `not_qc_score_${relevance.score}`;
     logSkip(text, `${skipped}:${relevance.reasons.join(",")}`, chatTitle);

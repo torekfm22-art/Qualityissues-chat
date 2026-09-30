@@ -1,5 +1,10 @@
 import { emptyNcr, type NcrRecord } from "./types";
 import { isConfidentNcrRecord } from "./parse-ncr";
+import {
+  getFewShotExamples,
+  learnedProductNames,
+  learnedVehicleModels,
+} from "./training";
 
 export type LlmAssistMode = "openai" | "mock" | "off";
 
@@ -31,13 +36,54 @@ export function resolveLlmConfig(enabledFromSettings = true): LlmConfig {
   return { enabled: true, apiKey, baseUrl, model, mode: "openai" };
 }
 
-const SYSTEM_PROMPT = `당신은 자동차/전자 공장 품질 부적합(NCR) 톡을 표 필드로 정리하는 도우미입니다.
+function buildSystemPrompt(): string {
+  const models = learnedVehicleModels();
+  const products = learnedProductNames();
+  const modelHint = models.length
+    ? `현장 확인 차종 예: ${models.slice(0, 20).join(", ")}.`
+    : "차종 예: JG1, SG2, SP2, MV1, MQ4.";
+  const productHint = products.length
+    ? `현장 확인 품명 예: ${products.slice(0, 20).join(", ")}.`
+    : "품명 예: ICCU.";
+
+  return `당신은 자동차/전자 공장 품질 부적합(NCR) 톡을 표 필드로 정리하는 도우미입니다.
 주어진 한국어 현장 톡에서 JSON만 반환하세요. 추측으로 없는 값을 만들지 마세요. 없으면 빈 문자열.
-차종(vehicleModel)은 JG1, SG2, SP2, MV1, MQ4 같은 모델 코드입니다. 품명(productName)은 ICCU 같은 제품명입니다. 둘을 섞지 마세요.
+차종(vehicleModel)과 품명(productName)을 섞지 마세요. ${modelHint} ${productHint}
 
 응답 형식:
 {"records":[{"vehicleModel":"","productName":"","partNumber":"","defect":"","process":"","quantity":"","lot":"","line":"","action":"","note":"","reporter":"","occurredAt":""}]}
 부적합이 아니면 {"records":[]}`;
+}
+
+function buildFewShotMessages(): { role: "user" | "assistant"; content: string }[] {
+  const shots = getFewShotExamples(5);
+  const out: { role: "user" | "assistant"; content: string }[] = [];
+  for (const shot of shots) {
+    out.push({ role: "user", content: shot.text.slice(0, 800) });
+    out.push({
+      role: "assistant",
+      content: JSON.stringify({
+        records: [
+          {
+            vehicleModel: shot.after.vehicleModel || "",
+            productName: shot.after.productName || "",
+            partNumber: shot.after.partNumber || "",
+            defect: shot.after.defect || "",
+            process: shot.after.process || "",
+            quantity: shot.after.quantity || "",
+            lot: shot.after.lot || "",
+            line: shot.after.line || "",
+            action: shot.after.action || "",
+            note: shot.after.note || "",
+            reporter: shot.after.reporter || "",
+            occurredAt: shot.after.occurredAt || "",
+          },
+        ],
+      }),
+    });
+  }
+  return out;
+}
 
 function normalizeRecord(raw: Partial<NcrRecord>, sourceText: string): NcrRecord {
   return emptyNcr({
@@ -139,8 +185,19 @@ export function mockLlmParseNcr(text: string): NcrRecord[] {
     if (m) record.vehicleModel = m[1];
   }
   if (!record.productName) {
-    const m = blob.match(/\b(ICCU|[A-Z]{2,}(?:\s*ASSY)?)\b/);
-    if (m && m[1] !== record.vehicleModel) record.productName = m[1];
+    const learned = learnedProductNames().find((p) => blob.includes(p));
+    if (learned) {
+      record.productName = learned;
+    } else {
+      const m = blob.match(/\b(ICCU|[A-Z]{2,}(?:\s*ASSY)?)\b/);
+      if (m && m[1] !== record.vehicleModel) record.productName = m[1];
+    }
+  }
+  if (!record.vehicleModel) {
+    const learned = learnedVehicleModels().find((m) =>
+      new RegExp(`\\b${m}\\b`, "i").test(blob),
+    );
+    if (learned) record.vehicleModel = learned;
   }
   if (!record.defect) {
     const m = blob.match(
@@ -176,7 +233,8 @@ export async function openaiParseNcr(
       temperature: 0,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: buildSystemPrompt() },
+        ...buildFewShotMessages(),
         { role: "user", content: text.slice(0, 4000) },
       ],
     }),

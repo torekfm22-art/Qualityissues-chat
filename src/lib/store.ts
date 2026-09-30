@@ -100,6 +100,22 @@ export function clearMessages(dayKey?: string): number {
   return before - data.messages.length;
 }
 
+export function getMessageById(id: string): StoredMessage | null {
+  return readRaw().messages.find((m) => m.id === id) ?? null;
+}
+
+export function updateMessageById(
+  id: string,
+  patch: Partial<StoredMessage>,
+): StoredMessage | null {
+  const data = readRaw();
+  const idx = data.messages.findIndex((m) => m.id === id);
+  if (idx < 0) return null;
+  data.messages[idx] = { ...data.messages[idx], ...patch, id };
+  writeRaw(data);
+  return data.messages[idx];
+}
+
 export function getExportsDir(): string {
   ensureDir();
   return path.join(DATA_DIR, "exports");

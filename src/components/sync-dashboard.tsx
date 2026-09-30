@@ -1,18 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   Bot,
   CalendarDays,
+  Check,
   Download,
   FileUp,
   Loader2,
   MessageSquare,
+  Pencil,
   RefreshCw,
   Settings2,
   Sparkles,
   Wifi,
+  X,
 } from "lucide-react";
+import type { NcrRecord } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,6 +82,12 @@ export function SyncDashboard() {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [trainingCount, setTrainingCount] = useState(0);
+  const [editing, setEditing] = useState<{
+    messageId: string;
+    recordId: string;
+    fields: Partial<NcrRecord>;
+  } | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -114,21 +124,34 @@ export function SyncDashboard() {
     else setWebhookInfo(null);
   }, []);
 
+  const loadTraining = useCallback(async () => {
+    try {
+      const res = await fetch("/api/training");
+      const data = await res.json();
+      if (res.ok) setTrainingCount(data.sampleCount || 0);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
       const q = dayKey ? `?day=${encodeURIComponent(dayKey)}` : "";
-      const [msgRes, setRes] = await Promise.all([
+      const [msgRes, setRes, trainRes] = await Promise.all([
         fetch(`/api/messages${q}`),
         fetch("/api/settings"),
+        fetch("/api/training"),
       ]);
       if (cancelled) return;
       const msgData = await msgRes.json();
       const setData = (await setRes.json()) as SettingsResponse;
+      const trainData = await trainRes.json().catch(() => ({}));
       if (cancelled) return;
       setDayKey(msgData.dayKey);
       setMessages(msgData.messages);
       setStats(msgData.stats);
+      setTrainingCount(trainData.sampleCount || 0);
       setSettings(setData.settings);
       setBot(setData.bot);
       setBotError(setData.botError);
@@ -307,6 +330,37 @@ export function SyncDashboard() {
     }
   }
 
+  async function submitFeedback(
+    messageId: string,
+    recordId: string,
+    kind: "confirm" | "correct",
+    fields?: Partial<NcrRecord>,
+  ) {
+    setBusy(`feedback-${messageId}`);
+    setError(null);
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, recordId, kind, fields }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "피드백 실패");
+      setEditing(null);
+      await loadMessages(dayKey);
+      await loadTraining();
+      showToast(
+        kind === "confirm"
+          ? `확인 반영 · 학습 ${data.lexicon?.sampleCount ?? ""}건`
+          : `수정 학습 반영 · 학습 ${data.lexicon?.sampleCount ?? ""}건`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "피드백 저장 실패");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function uploadKakao(file: File) {
     setBusy("kakao");
     setError(null);
@@ -392,9 +446,14 @@ export function SyncDashboard() {
           </TabsList>
 
           <TabsContent value="today" className="space-y-4">
-            <section className="grid gap-3 sm:grid-cols-3">
+            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard label="오늘 메시지" value={`${stats.messageCount}`} hint="수집된 톡" />
               <StatCard label="부적합 건수" value={`${stats.ncrCount}`} hint="엑셀 행 기준" />
+              <StatCard
+                label="학습 샘플"
+                value={`${trainingCount}`}
+                hint="확인·수정으로 패턴/LLM 고도화"
+              />
               <StatCard
                 label="연동 상태"
                 value={settings?.hasToken ? "텔레그램 준비됨" : "토큰 없음"}
@@ -465,47 +524,178 @@ export function SyncDashboard() {
                             {c.short}
                           </TableHead>
                         ))}
+                        <TableHead className="text-white">검토</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {flatRows.map(({ message, record }, idx) => (
-                        <TableRow key={`${message.id}-${record.id}-${idx}`}>
-                          <TableCell>
-                            <div className="flex flex-col gap-1">
-                              <Badge variant="secondary">{message.source}</Badge>
-                              {message.parseSource === "pattern" && (
-                                <Badge variant="outline" className="text-[10px]">
-                                  패턴
-                                </Badge>
-                              )}
-                              {(message.parseSource === "llm" ||
-                                message.parseSource === "llm_mock") && (
-                                <Badge
-                                  variant="outline"
-                                  className="border-amber-500/50 text-[10px] text-amber-800"
+                      {flatRows.map(({ message, record }, idx) => {
+                        const isEditing =
+                          editing?.messageId === message.id &&
+                          editing?.recordId === record.id;
+                        return (
+                          <Fragment key={`${message.id}-${record.id}-${idx}`}>
+                            <TableRow>
+                              <TableCell>
+                                <div className="flex flex-col gap-1">
+                                  <Badge variant="secondary">{message.source}</Badge>
+                                  {message.parseSource === "pattern" && (
+                                    <Badge variant="outline" className="text-[10px]">
+                                      패턴
+                                    </Badge>
+                                  )}
+                                  {(message.parseSource === "llm" ||
+                                    message.parseSource === "llm_mock") && (
+                                    <Badge
+                                      variant="outline"
+                                      className="border-amber-500/50 text-[10px] text-amber-800"
+                                    >
+                                      {message.needsReview ? "LLM·검토" : "LLM"}
+                                    </Badge>
+                                  )}
+                                  {message.confirmed && (
+                                    <Badge className="bg-emerald-700 text-[10px] text-white">
+                                      확인됨
+                                    </Badge>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="max-w-[140px] truncate text-sm">
+                                {message.chatTitle}
+                              </TableCell>
+                              {NCR_COLUMNS.slice(0, 7).map((c) => (
+                                <TableCell
+                                  key={c.key}
+                                  className="max-w-[160px] truncate text-[13px]"
+                                  title={record[c.key]}
                                 >
-                                  {message.needsReview ? "LLM·검토" : "LLM"}
-                                </Badge>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="max-w-[140px] truncate text-sm">
-                            {message.chatTitle}
-                          </TableCell>
-                          {NCR_COLUMNS.slice(0, 7).map((c) => (
-                            <TableCell
-                              key={c.key}
-                              className="max-w-[160px] truncate text-[13px]"
-                              title={record[c.key]}
-                            >
-                              {c.key === "occurredAt"
-                                ? record.occurredAt ||
-                                  formatKstDisplay(message.receivedAt)
-                                : record[c.key] || "—"}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))}
+                                  {c.key === "occurredAt"
+                                    ? record.occurredAt ||
+                                      formatKstDisplay(message.receivedAt)
+                                    : record[c.key] || "—"}
+                                </TableCell>
+                              ))}
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={
+                                      !!busy || message.confirmed === true
+                                    }
+                                    onClick={() =>
+                                      void submitFeedback(
+                                        message.id,
+                                        record.id,
+                                        "confirm",
+                                      )
+                                    }
+                                    title="정답으로 확인 · 학습에 반영"
+                                  >
+                                    {busy === `feedback-${message.id}` ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <Check className="h-3.5 w-3.5" />
+                                    )}
+                                    확인
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={!!busy}
+                                    onClick={() =>
+                                      setEditing({
+                                        messageId: message.id,
+                                        recordId: record.id,
+                                        fields: {
+                                          vehicleModel: record.vehicleModel,
+                                          productName: record.productName,
+                                          defect: record.defect,
+                                          process: record.process,
+                                          quantity: record.quantity,
+                                          action: record.action,
+                                        },
+                                      })
+                                    }
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                    수정
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                            {isEditing && editing && (
+                              <TableRow className="bg-[var(--panel-soft)]/80">
+                                <TableCell colSpan={10}>
+                                  <div className="grid gap-2 sm:grid-cols-3">
+                                    {(
+                                      [
+                                        ["vehicleModel", "차종"],
+                                        ["productName", "품명"],
+                                        ["defect", "불량"],
+                                        ["process", "공정"],
+                                        ["quantity", "수량"],
+                                        ["action", "조치"],
+                                      ] as const
+                                    ).map(([key, label]) => (
+                                      <label
+                                        key={key}
+                                        className="space-y-1 text-xs text-[var(--ink-muted)]"
+                                      >
+                                        {label}
+                                        <Input
+                                          value={String(editing.fields[key] || "")}
+                                          onChange={(e) =>
+                                            setEditing((prev) =>
+                                              prev
+                                                ? {
+                                                    ...prev,
+                                                    fields: {
+                                                      ...prev.fields,
+                                                      [key]: e.target.value,
+                                                    },
+                                                  }
+                                                : prev,
+                                            )
+                                          }
+                                          className="h-8 bg-white text-sm"
+                                        />
+                                      </label>
+                                    ))}
+                                  </div>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    <Button
+                                      size="sm"
+                                      className="bg-[var(--steel-deep)] text-white"
+                                      disabled={!!busy}
+                                      onClick={() =>
+                                        void submitFeedback(
+                                          editing.messageId,
+                                          editing.recordId,
+                                          "correct",
+                                          editing.fields,
+                                        )
+                                      }
+                                    >
+                                      <Check className="h-3.5 w-3.5" />
+                                      수정 저장·학습
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setEditing(null)}
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                      취소
+                                    </Button>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </Fragment>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>

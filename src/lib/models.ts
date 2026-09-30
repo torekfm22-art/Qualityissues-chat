@@ -19,6 +19,9 @@ export interface StoredMessage {
   parseSource?: ParsePipelineSource;
   /** LLM-assisted rows should be human-checked */
   needsReview?: boolean;
+  /** Human confirmed the parsed fields (training feedback) */
+  confirmed?: boolean;
+  confirmedAt?: string;
 }
 
 export interface DiscoveredChat {
