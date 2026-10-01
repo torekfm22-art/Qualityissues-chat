@@ -40,5 +40,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-data/
 .env*.local
+
+# 수집 메시지·일일 엑셀·학습 샘플은 저장소에 포함한다.
+# 봇 토큰과 임시 파일만 로컬에 남긴다.
+data/secrets.json
+data/**/*.tmp
+data/skip-log.jsonl

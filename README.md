@@ -51,4 +51,4 @@ TELEGRAM_BOT_TOKEN=xxxxx npm run collector
 
 - Next.js (App Router) + TypeScript + Tailwind + shadcn/ui
 - ExcelJS
-- 로컬 JSON 저장소 (`data/store.json`, gitignore)
+- 로컬 JSON 저장소 (`data/store.json`, `data/exports/`, `data/training/`). 수집 결과는 저장소에 포함된다. 봇 토큰은 `data/secrets.json` 또는 `.env.local`에만 둔다.

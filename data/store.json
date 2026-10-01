@@ -1,0 +1,15 @@
+{
+  "settings": {
+    "telegramBotToken": "",
+    "telegramChatIds": [],
+    "telegramWebhookSecret": "",
+    "exportHourKst": 23,
+    "autoExportEnabled": true,
+    "replyOnIngest": true,
+    "llmAssistEnabled": true,
+    "lastPollUpdateId": 0,
+    "lastDailyExportDay": "",
+    "discoveredChats": []
+  },
+  "messages": []
+}

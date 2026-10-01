@@ -9,34 +9,116 @@ import {
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
+const SECRETS_PATH = path.join(DATA_DIR, "secrets.json");
+
+type LocalSecrets = {
+  telegramBotToken: string;
+  telegramWebhookSecret: string;
+};
+
+const EMPTY_SECRETS: LocalSecrets = {
+  telegramBotToken: "",
+  telegramWebhookSecret: "",
+};
 
 function ensureDir() {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  const exportsDir = path.join(DATA_DIR, "exports");
-  if (!existsSync(exportsDir)) mkdirSync(exportsDir, { recursive: true });
+  for (const dir of [
+    DATA_DIR,
+    path.join(DATA_DIR, "exports"),
+    path.join(DATA_DIR, "training"),
+  ]) {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  }
+}
+
+function readSecrets(): LocalSecrets {
+  if (!existsSync(SECRETS_PATH)) return { ...EMPTY_SECRETS };
+  try {
+    const parsed = JSON.parse(readFileSync(SECRETS_PATH, "utf8")) as Partial<LocalSecrets>;
+    return {
+      telegramBotToken: parsed.telegramBotToken?.trim() || "",
+      telegramWebhookSecret: parsed.telegramWebhookSecret?.trim() || "",
+    };
+  } catch {
+    return { ...EMPTY_SECRETS };
+  }
+}
+
+function writeSecrets(secrets: LocalSecrets) {
+  ensureDir();
+  const tmp = `${SECRETS_PATH}.${process.pid}.tmp`;
+  writeFileSync(
+    tmp,
+    JSON.stringify(
+      {
+        telegramBotToken: secrets.telegramBotToken.trim(),
+        telegramWebhookSecret: secrets.telegramWebhookSecret.trim(),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  renameSync(tmp, SECRETS_PATH);
+}
+
+function withoutSecrets(settings: AppSettings): AppSettings {
+  return { ...settings, telegramBotToken: "", telegramWebhookSecret: "" };
+}
+
+function writeStoreFile(data: StoreData) {
+  ensureDir();
+  const tmp = `${STORE_PATH}.${process.pid}.tmp`;
+  writeFileSync(
+    tmp,
+    JSON.stringify(
+      { settings: withoutSecrets(data.settings), messages: data.messages },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  renameSync(tmp, STORE_PATH);
 }
 
 function readRaw(): StoreData {
   ensureDir();
-  if (!existsSync(STORE_PATH)) {
-    return { settings: { ...DEFAULT_SETTINGS }, messages: [] };
+  let stored: StoreData = { settings: { ...DEFAULT_SETTINGS }, messages: [] };
+  if (existsSync(STORE_PATH)) {
+    try {
+      const parsed = JSON.parse(readFileSync(STORE_PATH, "utf8")) as StoreData;
+      stored = {
+        settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
+        messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      };
+    } catch {
+      stored = { settings: { ...DEFAULT_SETTINGS }, messages: [] };
+    }
   }
-  try {
-    const parsed = JSON.parse(readFileSync(STORE_PATH, "utf8")) as StoreData;
-    return {
-      settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
-      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-    };
-  } catch {
-    return { settings: { ...DEFAULT_SETTINGS }, messages: [] };
+
+  const secrets = readSecrets();
+  const legacyToken = stored.settings.telegramBotToken?.trim() || "";
+  const legacySecret = stored.settings.telegramWebhookSecret?.trim() || "";
+  const telegramBotToken = secrets.telegramBotToken || legacyToken;
+  const telegramWebhookSecret = secrets.telegramWebhookSecret || legacySecret;
+
+  if (legacyToken || legacySecret) {
+    writeSecrets({ telegramBotToken, telegramWebhookSecret });
+    writeStoreFile({ settings: stored.settings, messages: stored.messages });
   }
+
+  return {
+    settings: { ...stored.settings, telegramBotToken, telegramWebhookSecret },
+    messages: stored.messages,
+  };
 }
 
 function writeRaw(data: StoreData) {
-  ensureDir();
-  const tmp = `${STORE_PATH}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  renameSync(tmp, STORE_PATH);
+  writeSecrets({
+    telegramBotToken: data.settings.telegramBotToken || "",
+    telegramWebhookSecret: data.settings.telegramWebhookSecret || "",
+  });
+  writeStoreFile(data);
 }
 
 export function getStore(): StoreData {
